@@ -1,0 +1,6 @@
+[package]
+name = "irc_server"
+version = "0.1.0"
+authors = ["Laza Upatising <lazau@lazau.com>"]
+
+[dependencies]
