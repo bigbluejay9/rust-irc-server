@@ -4,3 +4,6 @@ version = "0.1.0"
 authors = ["Laza Upatising <lazau@lazau.com>"]
 
 [dependencies]
+getopts = "^0.2"
+log = "^0.3"
+env_logger = "^0.4"
