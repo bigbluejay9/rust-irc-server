@@ -116,9 +116,12 @@ mod test {
             }
         }
     }
-
     macro_rules! test_syntax_pass {
-        ($name:ident, $input:expr, $prefix:expr, $command:expr, [$($params:expr),*]) => {
+        ($name:ident, $input:expr, Syntax {
+            prefix: $prefix:expr,
+            command: $command:expr,
+            params: [$($params:expr),*],
+        }) => {
             #[test]
             fn $name() {
                 let s = parse_syntax(&format!("{}\r\n",$input)).unwrap();
@@ -140,14 +143,40 @@ mod test {
     test_syntax_fail!(empty, "");
     test_syntax_fail!(just_prefix, ":lazau");
 
-    test_syntax_pass!(hello_world, "hello world", "", "hello", ["world"]);
-    test_syntax_pass!(empty_param, "comm", "", "comm", []);
-    test_syntax_pass!(empty_param_trailer, "hello :", "", "hello", []);
+    test_syntax_pass!(
+        hello_world,
+        "hello world",
+        Syntax {
+            prefix: "",
+            command: "hello",
+            params: ["world"],
+        }
+    );
+    test_syntax_pass!(
+        empty_param,
+        "comm",
+        Syntax {
+            prefix: "",
+            command: "comm",
+            params: [],
+        }
+    );
+    test_syntax_pass!(
+        empty_param_trailer,
+        "hello :",
+        Syntax {
+            prefix: "",
+            command: "hello",
+            params: [],
+        }
+    );
     test_syntax_pass!(
         full,
         ":lazau CONNECT server server2 :server 3 5 6",
-        ":lazau",
-        "CONNECT",
-        ["server", "server2", "server 3 5 6"]
+        Syntax {
+            prefix: ":lazau",
+            command: "CONNECT",
+            params: ["server", "server2", "server 3 5 6"],
+        }
     );
 }
