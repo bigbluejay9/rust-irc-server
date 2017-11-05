@@ -132,9 +132,7 @@ mod test {
                 let params:Vec<&str> = vec![$($params),*];
                 let expect :Vec<String> = params.iter().map(|s| s.to_string()).collect();
                 assert_eq!(expect.len(), s.params.len());
-                for p in expect.iter().zip(s.params.iter()) {
-                    assert_eq!(p.0, p.1);
-                }
+                expect.iter().zip(s.params.iter()).for_each(|p| assert_eq!(p.0, p.1));
             }
         }
     }
