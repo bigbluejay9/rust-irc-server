@@ -5,6 +5,7 @@ extern crate env_logger;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate futures;
+extern crate futures_cpupool;
 
 use tokio_core::net::{TcpStream, TcpListener};
 use tokio_core::reactor::Core;
@@ -13,6 +14,7 @@ use tokio_io::AsyncRead;
 use std::net::SocketAddr;
 use std::io;
 use futures::{future, Future, Stream};
+use futures_cpupool::CpuPool;
 
 mod parser;
 
@@ -21,7 +23,11 @@ fn print_usage(prog: &str, opts: getopts::Options) {
     print!("{}", opts.usage(&brief));
 }
 
-fn handler(stream: TcpStream, remote: SocketAddr) -> Box<Future<Item = (), Error = ()>> {
+// Run in thread pool thread. Safe-ish to block.
+//fn handler(stream: TcpStream, remote: SocketAddr) -> //
+/*fn handler<F>(stream: TcpStream, remote: SocketAddr) -> impl Future<Item =(), Error = ()>
+where F: Future<
+Box<Future<Item = (), Error = ()>> {
     debug!("{:?}: {:?}", stream, remote);
     let (reader, writer) = stream.split();
     let fut = copy(reader, writer).then(move |result| {
@@ -33,15 +39,28 @@ fn handler(stream: TcpStream, remote: SocketAddr) -> Box<Future<Item = (), Error
     });
 
     Box::new(fut)
-    //Box::new(future::ok::<(), ()>(()))
-}
+    //Box::new(future::ok::<bool, ()>(true))
+    //Ok(())
+}*/
 
 fn start_server(addr: &SocketAddr) -> io::Result<()> {
     let mut core = Core::new()?;
+    let cpu_pool = CpuPool::new_num_cpus();
     let handle = core.handle();
     let listener = TcpListener::bind(addr, &handle)?;
-    let server = listener.incoming().for_each(|(sock, remote)| {
-        handle.spawn(handler(sock, remote));
+    let server = listener.incoming().for_each(|(sock, _remote)| {
+        let (reader, writer) = sock.split();
+        cpu_pool.spawn(move || {
+            copy(reader, writer)
+                .map(|amt| debug!("Wrote {:?} bytes.", amt))
+                .map_err(|e| warn!("Failed to copy bytes: {:?}.", e))
+        });
+        // Spawn in select loop.
+        /*handle.spawn(move || {
+            // Spawn in CpuPool.
+            cpu_pool.spawn_fn(move || handler(sock, remote))
+        });*/
+        //cpu_pool.spawn(handler(sock, remote));
         Ok(())
     });
     core.run(server)
