@@ -7,12 +7,14 @@ extern crate tokio_io;
 extern crate futures;
 extern crate futures_cpupool;
 
+use std::net::SocketAddr;
+use std::io::{BufRead, BufReader};
+
 use tokio_core::net::{TcpStream, TcpListener};
 use tokio_core::reactor::Core;
-use tokio_io::io::copy;
 use tokio_io::AsyncRead;
-use std::net::SocketAddr;
-use std::io;
+use tokio_io::io;
+
 use futures::{future, Future, Stream};
 use futures_cpupool::CpuPool;
 
@@ -23,54 +25,78 @@ fn print_usage(prog: &str, opts: getopts::Options) {
     print!("{}", opts.usage(&brief));
 }
 
-// Run in thread pool thread. Safe-ish to block.
-//fn handler(stream: TcpStream, remote: SocketAddr) -> //
-/*fn handler<F>(stream: TcpStream, remote: SocketAddr) -> impl Future<Item =(), Error = ()>
-where F: Future<
-Box<Future<Item = (), Error = ()>> {
-    debug!("{:?}: {:?}", stream, remote);
-    let (reader, writer) = stream.split();
-    let fut = copy(reader, writer).then(move |result| {
-        match result {
-            Ok((amt, _, _)) => debug!("Wrote {} bytes.", amt),
-            Err(e) => error!("Error on {:?}: {:?}.", remote, e),
-        };
-        Ok(())
-    });
+fn process_line<A>(
+    thread_pool: &CpuPool,
+    line: Vec<u8>,
+    buffered_reader: A,
+) -> Box<Future<Item = (), Error = std::io::Error> + Send>
+where
+    A: BufRead,
+{
+    debug!("Processing line: {}.", String::from_utf8(line).unwrap());
+    debug!("Reading next line...");
+    line.clear();
+    return thread_pool.spawn(io::read_until(buffered_reader, '\n' as u8, line).then(
+        |r| {
+            match r {
+                Ok((buf, line)) => process_line(thread_pool, buf, line),
+                Err(e) => Err(e),
+            }
+        },
+    ));
+    /*Box::new(
+        io::read_until(reader, '\n' as u8, Vec::new())
+            .then(|r| match r {
+                Ok((buf, res)) => {
+                    debug!("Read line: [{}].", String::from_utf8(res).unwrap());
+                    io::read_until(buf, '\n' as u8, Vec::new())
+                }
+                Err(e) => panic!("{:?}", e),
+            })
+            .then(|r| match r {
+                Ok((_, res)) => {
+                    debug!("Read second line: [{}].", String::from_utf8(res).unwrap());
+                    future::ok::<(), std::io::Error>(())
+                }
+                Err(e) => panic!("{:?}", e),
+            }),
+    )*/
+}
 
-    Box::new(fut)
-    //Box::new(future::ok::<bool, ()>(true))
-    //Ok(())
-}*/
+fn start_server(addr: SocketAddr) -> std::io::Result<()> {
+    let mut event_loop = Core::new()?;
+    let thread_pool = CpuPool::new(1);
+    let handle = event_loop.handle();
+    let listener = TcpListener::bind(&addr, &handle)?;
 
-fn start_server(addr: &SocketAddr) -> io::Result<()> {
-    let mut core = Core::new()?;
-    let cpu_pool = CpuPool::new_num_cpus();
-    let handle = core.handle();
-    let listener = TcpListener::bind(addr, &handle)?;
-    let server = listener.incoming().for_each(|(sock, _remote)| {
-        let (reader, writer) = sock.split();
-        cpu_pool.spawn(move || {
-            copy(reader, writer)
-                .map(|amt| debug!("Wrote {:?} bytes.", amt))
-                .map_err(|e| warn!("Failed to copy bytes: {:?}.", e))
+    let server = listener.incoming().for_each(|(sock, remote)| {
+        // The main thread's whole purpose is to accept incoming connections and dispatches work
+        // into CpuPool threads.
+        // http://berb.github.io/diploma-thesis/original/042_serverarch.html
+        let tp = thread_pool.clone();
+        handle.spawn_fn(move || {
+            debug!("{:?}: {:?}", sock, remote);
+            let (raw_reader, _writer) = sock.split();
+            let reader = BufReader::new(raw_reader);
+            tp.spawn(io::read_until(reader, '\n' as u8, Vec::new()).then(
+                |r| match *r {
+                    Ok((buf, line)) => process_line(tp, buf, line),
+                    Err(e) => Err(e),
+                },
+            )).map_err(|e| {
+                    warn!("Discarding worker thread error {:?}.", e);
+                });
         });
-        // Spawn in select loop.
-        /*handle.spawn(move || {
-            // Spawn in CpuPool.
-            cpu_pool.spawn_fn(move || handler(sock, remote))
-        });*/
-        //cpu_pool.spawn(handler(sock, remote));
+
         Ok(())
     });
-    core.run(server)
+    event_loop.run(server)
 }
 
 fn main() {
     env_logger::init().unwrap();
 
     let args: Vec<String> = std::env::args().collect();
-    let program = args[0].clone();
 
     let mut opts = getopts::Options::new();
     opts.optflag("h", "help", "print help menu");
@@ -82,7 +108,7 @@ fn main() {
     };
 
     if matches.opt_present("h") || matches.free.len() != 1 {
-        print_usage(&program, opts);
+        print_usage(&args[0], opts);
         return;
     }
 
@@ -90,14 +116,14 @@ fn main() {
     addr.push_str(&matches.free[0]);
     let socket_addr = match addr.parse::<SocketAddr>() {
         Err(e) => {
-            print_usage(&program, opts);
+            print_usage(&args[0], opts);
             println!("Bad address to listen on {}: {}.", addr, e.to_string());
             return;
         }
         Ok(a) => a,
     };
 
-    match start_server(&socket_addr) {
+    match start_server(socket_addr) {
         Err(ref e) => error!("server failed: {}", e.to_string()),
         _ => {}
     }
