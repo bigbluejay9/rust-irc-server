@@ -9,19 +9,58 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 
-use futures::future;
+use futures::*;
+use futures::sync::mpsc;
+use futures::stream::Stream;
+use futures_cpupool::CpuPool;
+
+use tokio_core::reactor::Core;
+use tokio_core::net::{TcpListener, TcpStream};
+use tokio_io::AsyncRead;
 
 use tokio_proto::TcpServer;
 use tokio_service::Service;
 
-pub fn start(addr: SocketAddr) {
-    let cpus = num_cpus::get();
+pub fn start(addr: SocketAddr) -> io::Result<()> {
+    let mut event_loop = Core::new()?;
+    let handle = event_loop.handle();
+    let thread_pool = CpuPool::new_num_cpus();
+    let lis = TcpListener::bind(&addr, &handle)?;
+
+    let server = lis.incoming().for_each(|(stream, addr)| {
+        let (tx, rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel(1);
+        tx.send("a message from the queue.".to_string())
+            .wait()
+            .unwrap();
+        debug!("Accepting connection: {:?}, {:?}.", stream, addr);
+        handle.spawn(
+            thread_pool
+                .spawn(
+                    stream
+                        .framed(proto::Utf8CrlfCodec)
+                        .select(rx.map_err(
+                            |_| io::Error::new(io::ErrorKind::Other, "rx error"),
+                        ))
+                        .for_each(|s| {
+                            debug!("got {:?} frame.", s);
+                            future::ok(())
+                        }),
+                )
+                .then(|_| future::ok(())),
+        );
+        future::ok(())
+    });
+
+    event_loop.run(server)
+
+    /*let cpus = num_cpus::get();
     let server_data = Arc::new(Mutex::new(ServerData {
         hostname: hostname::get_hostname().expect("cannot get server hostname"),
         nicknames: HashSet::new(),
         open_connections: 0,
     }));
     debug!("Starting server on: {:?}, with {:?} cpus.", addr, cpus);
+
     let mut server = TcpServer::new(proto::IRCProto, addr);
     server.threads(cpus);
     server.serve(move || {
@@ -33,7 +72,7 @@ pub fn start(addr: SocketAddr) {
                 remote: None,
             }),
         })
-    });
+    });*/
 }
 
 #[derive(Debug)]

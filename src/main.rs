@@ -45,5 +45,8 @@ fn main() {
     };
     debug!("Socket addr {:?}.", socket_addr);
 
-    service::start(socket_addr);
+    match service::start(socket_addr) {
+        Err(e) => error!("Server failure: {:?}.", e),
+        _ => {}
+    };
 }

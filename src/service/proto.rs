@@ -43,6 +43,7 @@ impl Decoder for Utf8CrlfCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<String>, io::Error> {
+        debug!("In: {:?}.", src);
         let mut crlf_pos: Option<usize> = None;
         for (pos, &c) in src.iter().enumerate() {
             if pos > 1 && c == b'\n' && src[pos - 1] == b'\r' {
