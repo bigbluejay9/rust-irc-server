@@ -9,9 +9,9 @@ pub struct ParseError {
 
 #[derive(Debug)]
 pub struct Message {
-    prefix: Option<String>,
-    command: Command,
-    params: Vec<String>,
+    pub prefix: Option<String>,
+    pub command: Command,
+    pub params: Vec<String>,
 }
 
 // RFC 1459 4, 5.
@@ -100,11 +100,8 @@ impl str::FromStr for Message {
     type Err = ParseError;
     // RFC 1459 2
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 || s.len() > 512 {
+        if s.len() < 1 || s.len() > 510 {
             return Err(ParseError::new("bad command length"));
-        }
-        if !s.ends_with("\r\n") {
-            return Err(ParseError::new("command doesn't end with CR LF"));
         }
 
         let mut remainder: &str = &s.trim_right();

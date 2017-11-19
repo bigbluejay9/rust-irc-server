@@ -12,7 +12,7 @@ pub struct IRCProto;
 
 impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for IRCProto {
     type Request = String;
-    type Response = String;
+    type Response = Option<String>;
 
     type Transport = Framed<T, Utf8CrlfCodec>;
     type BindTransport = Result<Self::Transport, io::Error>;
@@ -24,11 +24,16 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for IRCProto {
 pub struct Utf8CrlfCodec;
 
 impl Encoder for Utf8CrlfCodec {
-    type Item = String;
+    type Item = Option<String>;
     type Error = io::Error;
-    fn encode(&mut self, item: String, dst: &mut BytesMut) -> Result<(), io::Error> {
-        dst.extend(item.as_bytes());
-        dst.extend(b"\r\n");
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
+        match item {
+            Some(ref s) => {
+                dst.extend(s.as_bytes());
+                dst.extend(b"\r\n");
+            }
+            None => {}
+        }
         Ok(())
     }
 }
@@ -40,7 +45,7 @@ impl Decoder for Utf8CrlfCodec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<String>, io::Error> {
         let mut crlf_pos: Option<usize> = None;
         for (pos, &c) in src.iter().enumerate() {
-            if pos > 1 && c == 0x0A && src[pos - 1] == 0x0D {
+            if pos > 1 && c == b'\n' && src[pos - 1] == b'\r' {
                 crlf_pos = Some(pos);
                 break;
             }

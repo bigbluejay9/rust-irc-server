@@ -1,5 +1,6 @@
 extern crate bytes;
 extern crate futures;
+extern crate hostname;
 #[macro_use]
 extern crate log;
 extern crate num_cpus;
