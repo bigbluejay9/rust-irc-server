@@ -1,3 +1,5 @@
+use super::messages;
+
 use std::io;
 use std::str;
 
@@ -9,15 +11,12 @@ use tokio_io::codec::{Encoder, Decoder};
 pub struct Utf8CrlfCodec;
 
 impl Encoder for Utf8CrlfCodec {
-    type Item = Option<String>;
+    type Item = Vec<messages::Message>;
     type Error = io::Error;
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
-        match item {
-            Some(ref s) => {
-                dst.extend(s.as_bytes());
-                dst.extend(b"\r\n");
-            }
-            None => {}
+        for message in item.iter() {
+            dst.extend(format!("{}", message).as_bytes());
+            dst.extend(b"\r\n");
         }
         Ok(())
     }
