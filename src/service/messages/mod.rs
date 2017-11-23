@@ -5,15 +5,16 @@ pub use self::responses::Response;
 pub use self::requests::Request;
 
 use std;
-use std::fmt;
+use std::fmt::{self, Write};
 use std::str;
 
 #[derive(Debug)]
 pub enum ParseErrorKind {
     NoCommand,
     UnrecognizedCommand,
-    TooFewParams,
+    NeedMoreParams,
     TooManyParams,
+    ParseIntError,
     Other,
 }
 
@@ -115,21 +116,28 @@ impl fmt::Display for Message {
             write!(f, ":{} ", prefix)?;
         }
         match self.command {
-            // TODO(lazau): Maybe don't panic here?
-            Command::Req(_) => panic!("Attempting to display client request."),
+            Command::Req(ref r) => write!(f, "{}", r)?,
             Command::Resp(ref r) => write!(f, "{}", r)?,
         };
-        /*if self.params.len() > 0 {
-            write!(f, " ")?;
-            for p in self.params.iter().take(self.params.len() - 1) {
-                // TODO(lazau): Maybe just split it into more params rather than panicking?
-                assert!(p.find(' ').is_none());
-                write!(f, "{} ", p)?;
-            }
-            write!(f, ":{}", self.params[self.params.len() - 1])?;
-        }*/
         Ok(())
     }
+}
+
+pub fn serialize_params<'a>(p: Vec<&'a String>) -> Result<String, std::fmt::Error> {
+    if p.len() == 0 {
+        return Ok("".to_string());
+    }
+    let mut out = String::new();
+    for o in p.iter().take(p.len() - 1) {
+        // TODO(lazau): Maybe just split it into more params rather than panicking?
+        assert!(
+            o.find(' ').is_none(),
+            "generating params list with space in non-trailing param"
+        );
+        write!(out, "{} ", o)?;
+    }
+    write!(out, ":{}", p[p.len() - 1])?;
+    return Ok(out);
 }
 
 #[cfg(test)]
