@@ -5,7 +5,16 @@ use std::collections::HashSet;
 use super::{ParseError, ParseErrorKind};
 use super::serialize_params;
 
-pub type UserModes = HashSet<UserMode>;
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct UserModes {
+    modes: HashSet<UserMode>,
+}
+
+impl fmt::Display for UserModes {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum UserMode {
@@ -20,6 +29,12 @@ pub enum UserMode {
     b,
     v,
     k,
+}
+
+impl fmt::Display for UserMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
 }
 
 pub type ChannelModes = HashSet<ChannelMode>;
@@ -39,7 +54,7 @@ pub enum ModeModifier {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum RequestMode {
+pub enum RequestedMode {
     Channel {
         channel: String,
         op: ModeModifier,
@@ -55,6 +70,12 @@ pub enum RequestMode {
     },
 }
 
+impl fmt::Display for RequestedMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum StatsQuery {
     c,
@@ -66,6 +87,12 @@ pub enum StatsQuery {
     o,
     y,
     u,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum JoinChannels {
+    Channels(Vec<String>),
+    KeyedChannels(Vec<(String, String)>),
 }
 
 // RFC 1459 4, 5. RFC 2812.
@@ -94,14 +121,14 @@ pub enum Request {
     // 4.2 Channel Operations.
     JOIN {
         part_all: bool,
-        channels: Vec<(String, Option<String>)>,
+        channels: JoinChannels,
     },
     PART {
         channels: Vec<String>,
         message: Option<String>,
     },
     // TODO(lazau): Verify.
-    MODE { request_mode: RequestMode },
+    MODE { mode: RequestedMode },
     TOPIC {
         channel: String,
         topic: Option<String>,
@@ -182,76 +209,170 @@ pub enum Request {
 #[allow(non_snake_case)]
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &Request::NICK { nickname: ref nick } => {
-                write!(f, "NICK {}", serialize_params(vec![nick])?)
-            }
-            &Request::PASS { password: ref pass } => {
-                write!(f, "PASS {}", serialize_params(vec![pass])?)
-            }
+        let out = match self {
+            &Request::NICK { nickname: nick } => format!("NICK {}", serialize_params(&vec![nick])?),
+
+            &Request::PASS { password: pass } => format!("PASS {}", serialize_params(&vec![pass])?),
+
             &Request::USER {
-                username: ref n,
-                mode: ref h,
-                unused: ref s,
-                realname: ref r,
-            } => write!(f, "USER {}", serialize_params(vec![n, h, s, r])?),
+                username: n,
+                mode: h,
+                unused: s,
+                realname: r,
+            } => format!("USER {}", serialize_params(&vec![n, h.to_string(), s, r])?),
+
             &Request::SERVER {
-                servername: ref s,
-                hopcount: ref h,
-                token: ref t,
-                info: ref i,
+                servername: s,
+                hopcount: h,
+                token: t,
+                info: i,
             } => {
-                write!(
-                    f,
+                format!(
                     "SERVER {}",
-                    serialize_params(vec![s, &h.to_string(), &t.to_string(), i])?
+                    serialize_params(&vec![s, h.to_string(), t.to_string(), i])?
                 )
             }
+
             &Request::OPER {
-                name: ref n,
-                password: ref p,
-            } => write!(f, "OPER {}", serialize_params(vec![n, p])?),
-            &Request::QUIT { message: ref m } => {
+                name: n,
+                password: p,
+            } => format!("OPER {}", serialize_params(&vec![n, p])?),
+
+            &Request::QUIT { message: m } => {
                 match m {
-                    &Some(ref s) => write!(f, "QUIT {}", serialize_params(vec![s])?),
-                    &None => write!(f, "QUIT"),
+                    Some(s) => format!("QUIT {}", serialize_params(&vec![s])?),
+                    None => format!("QUIT"),
                 }
             }
-            &Request::SQUIT => write!(f, "SQUIT"),
-            &Request::JOIN => write!(f, "JOIN"),
-            &Request::PART => write!(f, "PART"),
-            &Request::MODE => write!(f, "MODE"),
-            &Request::TOPIC => write!(f, "TOPIC"),
-            &Request::NAMES => write!(f, "NAMES"),
-            &Request::LIST => write!(f, "LIST"),
-            &Request::INVITE => write!(f, "INVITE"),
-            &Request::KICK => write!(f, "KICK"),
-            &Request::VERSION => write!(f, "VERSION"),
-            &Request::STATS => write!(f, "STATS"),
-            &Request::LINKS => write!(f, "LINKS"),
-            &Request::TIME => write!(f, "TIME"),
-            &Request::CONNECT => write!(f, "CONNECT"),
-            &Request::TRACE => write!(f, "TRACE"),
-            &Request::ADMIN => write!(f, "ADMIN"),
-            &Request::INFO => write!(f, "INFO"),
-            &Request::PRIVMSG => write!(f, "PRIVMSG"),
-            &Request::NOTICE => write!(f, "NOTICE"),
-            &Request::WHO => write!(f, "WHO"),
-            &Request::WHOIS => write!(f, "WHOIS"),
-            &Request::WHOWAS => write!(f, "WHOWAS"),
-            &Request::KILL => write!(f, "KILL"),
-            &Request::PING => write!(f, "PING"),
-            &Request::PONG => write!(f, "PONG"),
-            &Request::ERROR => write!(f, "ERROR"),
-            &Request::AWAY => write!(f, "AWAY"),
-            &Request::REHASH => write!(f, "REHASH"),
-            &Request::RESTART => write!(f, "RESTART"),
-            &Request::SUMMON => write!(f, "SUMMON"),
-            &Request::USERS => write!(f, "USERS"),
-            &Request::WALLOPS => write!(f, "WALLOPS"),
-            &Request::USERHOST => write!(f, "USERHOST"),
-            &Request::ISON => write!(f, "ISON"),
-        }
+
+            &Request::SQUIT {
+                server: s,
+                comment: c,
+            } => format!("SQUIT {}", serialize_params(&vec![s, c])?),
+
+            &Request::JOIN {
+                part_all: p,
+                channels: jc,
+            } => {
+                if p {
+                    format!("JOIN 0")
+                } else {
+                    let params = Vec::new();
+                    match jc {
+                        JoinChannels::Channels(c) => {
+                            params.push(c.join(","));
+                        }
+                        JoinChannels::KeyedChannels(kc) => {
+                            let (channels, keys): (Vec<String>,
+                                                   Vec<String>) = kc.iter().cloned().unzip();
+                            params.push(channels.join(","));
+                            params.push(keys.join(","));
+                        }
+                    };
+                    format!("JOIN {}", serialize_params(&params)?)
+                }
+            }
+
+            &Request::PART {
+                channels: c,
+                message: m,
+            } => {
+                let params = Vec::new();
+                params.push(c.join(","));
+                match m {
+                    Some(m) => params.push(m),
+                    None => {}
+                };
+                format!("PART {}", serialize_params(&params)?)
+            }
+
+            &Request::MODE { mode: m } => {
+                format!("MODE {}", serialize_params(&vec![m.to_string()])?)
+            }
+
+            &Request::TOPIC {
+                channel: c,
+                topic: t,
+            } => {
+                let params = Vec::new();
+                params.push(c);
+                match t {
+                    Some(t) => params.push(t),
+                    None => {}
+                }
+                format!("TOPIC {}", serialize_params(&params)?)
+            }
+
+            &Request::NAMES { channels: c } => format!("NAMES {}", serialize_params(&c)?),
+
+            &Request::LIST {
+                channels: c,
+                elist: e,
+            } => {
+                let params = Vec::new();
+                match c {
+                    Some(c) => {
+                        params.push(c.join(","));
+                        match e {
+                            Some(e) => params.push(e.join(",")),
+                            None => {}
+                        }
+                    }
+                    None => {}
+                }
+                format!("LIST {}", serialize_params(&params)?)
+            }
+
+            &Request::INVITE {
+                nickname: n,
+                channel: c,
+            } => format!("INVITE {}", serialize_params(&vec![n, c])?),
+
+            &Request::KICK {
+                channel: c,
+                user: u,
+                comment: co,
+            } => {
+                let params = Vec::new();
+                params.push(c.join(","));
+                params.push(u.join(","));
+                match co {
+                    Some(co) => params.push(co),
+                    None => {}
+                };
+                format!("KICK {}", serialize_params(&params)?);
+            }
+
+            &Request::VERSION => format!("VERSION"),
+            &Request::STATS => format!("STATS"),
+            &Request::LINKS => format!("LINKS"),
+            &Request::TIME => format!("TIME"),
+            &Request::CONNECT => format!("CONNECT"),
+            &Request::TRACE => format!("TRACE"),
+            &Request::ADMIN => format!("ADMIN"),
+            &Request::INFO => format!("INFO"),
+            &Request::PRIVMSG => format!("PRIVMSG"),
+            &Request::NOTICE => format!("NOTICE"),
+            &Request::WHO => format!("WHO"),
+            &Request::WHOIS => format!("WHOIS"),
+            &Request::WHOWAS => format!("WHOWAS"),
+            &Request::KILL => format!("KILL"),
+            &Request::PING => format!("PING"),
+            &Request::PONG => format!("PONG"),
+            &Request::ERROR => format!("ERROR"),
+            &Request::AWAY => format!("AWAY"),
+            &Request::REHASH => format!("REHASH"),
+            &Request::RESTART => format!("RESTART"),
+            &Request::SUMMON => format!("SUMMON"),
+            &Request::USERS => format!("USERS"),
+            &Request::WALLOPS => format!("WALLOPS"),
+            &Request::USERHOST => format!("USERHOST"),
+            &Request::ISON => format!("ISON"),
+        };
+
+        // Allows us to generate commands with trailing spaces (in the case of empty optional
+        // params).
+        write!(f, "{}", out.trim_right())
     }
 }
 

@@ -123,7 +123,7 @@ impl fmt::Display for Message {
     }
 }
 
-pub fn serialize_params<'a>(p: Vec<&'a String>) -> Result<String, std::fmt::Error> {
+pub fn serialize_params(p: &Vec<String>) -> Result<String, std::fmt::Error> {
     if p.len() == 0 {
         return Ok("".to_string());
     }
