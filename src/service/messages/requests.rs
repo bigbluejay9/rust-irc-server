@@ -89,6 +89,12 @@ pub enum StatsQuery {
     u,
 }
 
+impl fmt::Display for StatsQuery {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum JoinChannels {
     Channels(Vec<String>),
@@ -147,16 +153,19 @@ pub enum Request {
 
     // 4.3 Server queries and commands.
     VERSION { target: Option<String> },
-    STATS { query: StatsQuery, target: String },
+    STATS {
+        query: Option<StatsQuery>,
+        target: Option<String>,
+    },
     // TODO(lazau): Server mask should be a type.
     LINKS {
-        remote_server: String,
-        server_mask: String,
+        remote_server: Option<String>,
+        server_mask: Option<String>,
     },
     TIME { target: Option<String> },
     CONNECT {
         target: String,
-        port: Option<u32>,
+        port: u32,
         remote: Option<String>,
     },
     TRACE { target: Option<String> },
@@ -282,7 +291,7 @@ impl fmt::Display for Request {
                 match m {
                     Some(m) => params.push(m),
                     None => {}
-                };
+                }
                 format!("PART {}", serialize_params(&params)?)
             }
 
@@ -339,35 +348,243 @@ impl fmt::Display for Request {
                 match co {
                     Some(co) => params.push(co),
                     None => {}
-                };
-                format!("KICK {}", serialize_params(&params)?);
+                }
+                format!("KICK {}", serialize_params(&params)?)
             }
 
-            &Request::VERSION => format!("VERSION"),
-            &Request::STATS => format!("STATS"),
-            &Request::LINKS => format!("LINKS"),
-            &Request::TIME => format!("TIME"),
-            &Request::CONNECT => format!("CONNECT"),
-            &Request::TRACE => format!("TRACE"),
-            &Request::ADMIN => format!("ADMIN"),
-            &Request::INFO => format!("INFO"),
-            &Request::PRIVMSG => format!("PRIVMSG"),
-            &Request::NOTICE => format!("NOTICE"),
-            &Request::WHO => format!("WHO"),
-            &Request::WHOIS => format!("WHOIS"),
-            &Request::WHOWAS => format!("WHOWAS"),
-            &Request::KILL => format!("KILL"),
-            &Request::PING => format!("PING"),
-            &Request::PONG => format!("PONG"),
-            &Request::ERROR => format!("ERROR"),
-            &Request::AWAY => format!("AWAY"),
+            &Request::VERSION { target: t } => {
+                let params = Vec::new();
+                match t {
+                    Some(t) => params.push(t),
+                    None => {}
+                }
+                format!("VERSION {}", serialize_params(&params)?)
+            }
+
+            &Request::STATS {
+                query: sq,
+                target: t,
+            } => {
+                let params = Vec::new();
+                match sq {
+                    Some(sq) => {
+                        params.push(sq.to_string());
+                        match t {
+                            Some(t) => params.push(t),
+                            None => {}
+                        }
+                    }
+                    None => {}
+                }
+                format!("STATS {}", serialize_params(&params)?)
+            }
+
+            &Request::LINKS {
+                remote_server: r,
+                server_mask: s,
+            } => {
+                let params = Vec::new();
+                match s {
+                    Some(s) => {
+                        params.push(s);
+                        match r {
+                            Some(r) => params.push(r),
+                            None => {}
+                        }
+                    }
+                    None => {}
+                }
+                format!("LINKS {}", serialize_params(&params)?)
+            }
+
+            &Request::TIME { target: t } => {
+                let params = Vec::new();
+                match t {
+                    Some(t) => params.push(t),
+                    None => {}
+                }
+                format!("TIME {}", serialize_params(&params)?)
+            }
+
+            &Request::CONNECT {
+                target: t,
+                port: p,
+                remote: r,
+            } => {
+                let params = vec![t, p.to_string()];
+                match r {
+                    Some(r) => params.push(r),
+                    None => {}
+                }
+                format!("CONNECT {}", serialize_params(&params)?)
+            }
+
+            &Request::TRACE { target: t } => {
+                let params = Vec::new();
+                match t {
+                    Some(t) => params.push(t),
+                    None => {}
+                }
+                format!("TRACE {}", serialize_params(&params)?)
+            }
+
+            &Request::ADMIN { target: t } => {
+                let params = Vec::new();
+                match t {
+                    Some(t) => params.push(t),
+                    None => {}
+                }
+                format!("ADMIN {}", serialize_params(&params)?)
+            }
+
+            &Request::INFO { target: t } => {
+                let params = Vec::new();
+                match t {
+                    Some(t) => params.push(t),
+                    None => {}
+                }
+                format!("INFO {}", serialize_params(&params)?)
+            }
+
+            &Request::PRIVMSG {
+                targets: t,
+                text: x,
+            } => {
+                let params = vec![t.join(","), x];
+                format!("PRIVMSG {}", serialize_params(&params)?)
+            }
+
+            &Request::NOTICE {
+                targets: t,
+                text: x,
+            } => {
+                let params = vec![t.join(","), x];
+                format!("NOTICE {}", serialize_params(&params)?)
+            }
+
+            &Request::WHO {
+                mask: m,
+                operators: o,
+            } => {
+                let params = vec![m];
+                if o {
+                    params.push("o".to_string());
+                }
+                format!("WHO {}", serialize_params(&params)?)
+            }
+
+            &Request::WHOIS {
+                target: t,
+                masks: m,
+            } => {
+                let params = Vec::new();
+                match t {
+                    Some(t) => params.push(t),
+                    None => {}
+                }
+                params.push(m.join(","));
+                format!("WHOIS {}", serialize_params(&params)?)
+            }
+
+            &Request::WHOWAS {
+                nicknames: n,
+                max: m,
+                target: t,
+            } => {
+                let params = vec![n.join(",")];
+                if m.is_some() {
+                    params.push(m.unwrap().to_string());
+                    if t.is_some() {
+                        params.push(t.unwrap().to_string());
+                    }
+                }
+                format!("WHOWAS {}", serialize_params(&params)?)
+            }
+
+            &Request::KILL {
+                nickname: n,
+                comment: c,
+            } => {
+                let params = vec![n, c];
+                format!("KILL {}", serialize_params(&params)?)
+            }
+
+            &Request::PING {
+                server1: s1,
+                server2: s2,
+            } => {
+                let params = vec![s1];
+                if s2.is_some() {
+                    params.push(s2.unwrap());
+                }
+                format!("PING {}", serialize_params(&params)?)
+            }
+
+            &Request::PONG {
+                daemon1: d1,
+                daemon2: d2,
+            } => {
+                let params = vec![d1];
+                if d2.is_some() {
+                    params.push(d2.unwrap());
+                }
+                format!("PONG {}", serialize_params(&params)?)
+            }
+
+            &Request::ERROR { message: m } => {
+                let params = vec![m];
+                format!("ERROR {}", serialize_params(&params)?)
+            }
+
+            &Request::AWAY { message: m } => {
+                let params = Vec::new();
+                if m.is_some() {
+                    params.push(m.unwrap());
+                }
+                format!("AWAY {}", serialize_params(&params)?)
+            }
+
             &Request::REHASH => format!("REHASH"),
+
             &Request::RESTART => format!("RESTART"),
-            &Request::SUMMON => format!("SUMMON"),
-            &Request::USERS => format!("USERS"),
-            &Request::WALLOPS => format!("WALLOPS"),
-            &Request::USERHOST => format!("USERHOST"),
-            &Request::ISON => format!("ISON"),
+
+            &Request::SUMMON {
+                user: u,
+                target: t,
+                channel: c,
+            } => {
+                let params = vec![u];
+                if t.is_some() {
+                    params.push(t.unwrap());
+                    if c.is_some() {
+                        params.push(c.unwrap());
+                    }
+                }
+                format!("SUMMON {}", serialize_params(&params)?)
+            }
+
+            &Request::USERS { target: t } => {
+                let params = Vec::new();
+                if t.is_some() {
+                    params.push(t.unwrap());
+                }
+                format!("USERS {}", serialize_params(&params)?)
+            }
+
+            &Request::WALLOPS { text: t } => {
+                let params = vec![t];
+                format!("WALLOPS {}", serialize_params(&params)?)
+            }
+
+            &Request::USERHOST { nicknames: n } => {
+                let params = vec![n.join(",")];
+                format!("USERHOST {}", serialize_params(&params)?)
+            }
+
+            &Request::ISON { nicknames: n } => {
+                let params = vec![n.join(",")];
+                format!("ISON {}", serialize_params(&params)?)
+            }
         };
 
         // Allows us to generate commands with trailing spaces (in the case of empty optional
