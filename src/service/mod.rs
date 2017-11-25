@@ -72,17 +72,17 @@ pub fn start(addr: SocketAddr) {
                         warn!("Upstream error: {:?}.", err);
                         return future::err(err);
                     }
-                    let mut server_originated_messages: messages::MessageBuilder;
+                    /*let mut server_originated_messages: messages::MessageBuilder;
                     server_originated_messages.with_prefix(Some(hostname::get_hostname().expect(
                         "unable to get hostname",
-                    )));
+                    )));*/
 
                     let res = match event.unwrap() {
                         ClientEvent::Socket(s) => {
                             process_message(
                                 Arc::clone(&server_handle),
                                 Arc::clone(&client_handle),
-                                server_originated_messages,
+                                //server_originated_messages,
                                 s,
                             )
                         }
@@ -154,7 +154,7 @@ struct ConnectionData {
 fn process_message(
     server: Arc<Mutex<Server>>,
     client: Arc<Mutex<ConnectionData>>,
-    mut message_builder: messages::MessageBuilder,
+    //mut message_builder: messages::MessageBuilder,
     req: String,
 ) -> Vec<messages::Message> {
     debug!(
@@ -176,7 +176,7 @@ fn process_message(
     match message.command {
         messages::Command::Req(ref r) => {
             match r {
-                &messages::requests::Request::PASS => Vec::new(),//Some(req),
+                /*&messages::requests::Request::PASS => Vec::new(),//Some(req),
                 &messages::requests::Request::NICK => {
                     if message.params.len() == 0 {
                         return vec![
@@ -249,7 +249,8 @@ fn process_message(
                 u @ _ => {
                     error!("Response to {:?} not yet implemented.", u);
                     Vec::new()
-                }
+                }*/
+                _ => unimplemented!(),
             }
         }
         _ => {
@@ -263,13 +264,13 @@ fn process_message(
 fn maybe_welcome_sequence(
     server: &Server,
     client: &ConnectionData,
-    mut message_builder: messages::MessageBuilder,
 ) -> Option<Vec<messages::Message>> {
     if client.user.is_none() || client.nick.is_none() {
         return None;
     }
 
-    Some(vec![
+    unimplemented!()
+    /*Some(vec![
         message_builder
             .with_command(messages::Command::Resp(
                 messages::responses::Response::RPL_WELCOME,
@@ -309,5 +310,5 @@ fn maybe_welcome_sequence(
                 format!("{}", client.nick.as_ref().unwrap()).to_string(),
             ])
             .build(),
-    ])
+    ])*/
 }

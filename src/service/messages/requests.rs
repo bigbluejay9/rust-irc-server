@@ -219,18 +219,34 @@ pub enum Request {
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let out = match self {
-            &Request::NICK { nickname: nick } => format!("NICK {}", serialize_params(&vec![nick])?),
+            &Request::NICK { nickname: ref nick } => {
+                format!("NICK {}", serialize_params(&vec![nick.clone()])?)
+            }
 
-            &Request::PASS { password: pass } => format!("PASS {}", serialize_params(&vec![pass])?),
+            &Request::PASS { password: ref pass } => {
+                format!("PASS {}", serialize_params(&vec![pass.clone()])?)
+            }
 
             &Request::USER {
-                username: n,
-                mode: h,
-                unused: s,
-                realname: r,
-            } => format!("USER {}", serialize_params(&vec![n, h.to_string(), s, r])?),
+                username: ref n,
+                mode: ref h,
+                unused: ref s,
+                realname: ref r,
+            } => {
+                format!(
+                    "USER {}",
+                    serialize_params(&vec![
+                        n.clone(),
+                        h.clone().to_string(),
+                        s.clone(),
+                        r.clone(),
+                    ])?
+                )
+            }
 
-            &Request::SERVER {
+            _ => unimplemented!(),
+
+            /*&Request::SERVER {
                 servername: s,
                 hopcount: h,
                 token: t,
@@ -584,7 +600,7 @@ impl fmt::Display for Request {
             &Request::ISON { nicknames: n } => {
                 let params = vec![n.join(",")];
                 format!("ISON {}", serialize_params(&params)?)
-            }
+            }*/
         };
 
         // Allows us to generate commands with trailing spaces (in the case of empty optional
@@ -604,6 +620,14 @@ fn verify_at_least_params(
     Ok(())
 }
 
+macro_rules! parse_command {
+    ($name:expr, $out:ty {
+        $($inner:expr)+
+    }) => {
+
+    };
+}
+
 impl str::FromStr for Request {
     type Err = super::ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -611,7 +635,7 @@ impl str::FromStr for Request {
 
         let mut remainder: &str = &s;
 
-        let next_space;
+        //let next_space;
         let command_str: &str;
         match remainder.find(' ') {
             Some(idx) => {
@@ -651,8 +675,8 @@ impl str::FromStr for Request {
         }
 
         // TODO(lazau): Parse params.
-        match command_str.to_uppercase().as_ref() {
-            "NICK" => {
+        match command_str.to_uppercase() {
+            /*"NICK" => {
                 verify_at_least_params(&params, 1, "NICK")?;
                 Ok(Request::NICK { nickname: params[0] })
             }
@@ -735,7 +759,8 @@ impl str::FromStr for Request {
             _ => Err(super::ParseError::new(
                 super::ParseErrorKind::UnrecognizedCommand,
                 "unrecognized command",
-            )),
+            )),*/
+            _ => unimplemented!(),
         }
     }
 }

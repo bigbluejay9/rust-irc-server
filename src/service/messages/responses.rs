@@ -947,7 +947,7 @@ impl str::FromStr for Response {
             "004" => Ok(Response::RPL_MYINFO),
             "RPL_BOUNCE" => Ok(Response::RPL_BOUNCE),
             "005" => Ok(Response::RPL_BOUNCE),
-            _ => Err(super::ParseError::new("cannot parse reply string")),
+            _ => unimplemented!(), //Err(super::ParseError::new("cannot parse reply string")),
         }
     }
 }
