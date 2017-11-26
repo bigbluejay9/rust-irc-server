@@ -6,6 +6,9 @@ extern crate hostname;
 #[macro_use]
 extern crate log;
 extern crate num_cpus;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_proto;
