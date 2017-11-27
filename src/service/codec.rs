@@ -1,5 +1,3 @@
-use super::messages;
-
 use std::io;
 use std::str;
 
@@ -11,12 +9,13 @@ use tokio_io::codec::{Encoder, Decoder};
 pub struct Utf8CrlfCodec;
 
 impl Encoder for Utf8CrlfCodec {
-    type Item = Vec<messages::Message>;
+    type Item = Vec<String>;
     type Error = io::Error;
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         for message in item.iter() {
             // TODO(lazau): Don't unwrap.
-            dst.extend(messages::to_string(&message).unwrap().as_bytes());
+            dst.extend(message.as_bytes());
+            dst.extend(b"\r\n");
         }
         Ok(())
     }

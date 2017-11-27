@@ -4,7 +4,6 @@ mod messages;
 use hostname;
 use chrono;
 
-use std::str;
 use std::collections::HashSet;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -72,17 +71,15 @@ pub fn start(addr: SocketAddr) {
                         warn!("Upstream error: {:?}.", err);
                         return future::err(err);
                     }
-                    /*let mut server_originated_messages: messages::MessageBuilder;
-                    server_originated_messages.with_prefix(Some(hostname::get_hostname().expect(
-                        "unable to get hostname",
-                    )));*/
+                    let server_prefix =
+                        Some(hostname::get_hostname().expect("unable to get hostname"));
 
                     let res = match event.unwrap() {
                         ClientEvent::Socket(s) => {
                             process_message(
                                 Arc::clone(&server_handle),
                                 Arc::clone(&client_handle),
-                                //server_originated_messages,
+                                server_prefix,
                                 s,
                             )
                         }
@@ -92,6 +89,17 @@ pub fn start(addr: SocketAddr) {
                     };
                     future::ok(res)
                 })
+                .then( // ** Serialization future.
+                    |messages: Result<Vec<messages::Message>, _>| -> future::FutureResult<Vec<String>, _> {
+                        let mut result = Vec::new();
+                        // TODO(lazau): Perform 512 max line size here.
+                        for m in messages {
+                            // TODO(lazau): Convert serialization error to future::err.
+                            result.push(messages::Serialize(&m).unwrap());
+                        }
+                        future::ok(result)
+                    },
+                )
                 .forward(sink)
                 .then(move |e: Result<(_, _), io::Error>| {
                     // ** Cleanup future.
@@ -154,120 +162,95 @@ struct ConnectionData {
 fn process_message(
     server: Arc<Mutex<Server>>,
     client: Arc<Mutex<ConnectionData>>,
-    //mut message_builder: messages::MessageBuilder,
+    server_prefix: Option<String>,
     req: String,
 ) -> Vec<messages::Message> {
     debug!(
-        "Processing request [{:?}].\nClient state: {:?}.\nServer state: {:?}.",
+        "Processing request [{:?}].\nClient state: {:?}.\nServer state: {:?}.\nServer prefix: {:?}.",
         req,
         client,
-        server
+        server,
+        server_prefix
     );
 
-    unimplemented!()
-    /*let message;
-    match req.parse::<messages::Message>() {
+    let message = messages::Message {
+        prefix: None,
+        command: messages::Command::Resp(messages::Response::ERR_NICKNAMEINUSE),
+    };
+    /*match req.parse::<messages::Message>() {
         Ok(m) => message = m,
         Err(ref e) => {
             warn!("Bad client message [{:?}]: {:?}.", req, e);
             return Vec::new();
         }
-    };
+    };*/
 
     match message.command {
-        messages::Command::Req(ref r) => {
+        messages::Command::Req(r) => {
             match r {
-                &messages::requests::Request::PASS => Vec::new(),//Some(req),
-                &messages::requests::Request::NICK => {
-                    if message.params.len() == 0 {
-                        return vec![
-                            message_builder
-                                .with_command(messages::Command::Resp(
-                                    messages::responses::Response::ERR_NONICKNAMEGIVEN,
-                                ))
-                                .build(),
-                        ];
-                    }
-
-                    let nick = &message.params[0];
+                messages::Request::NICK { nickname: nick } => {
                     // TODO(lazau): Validate nick based on
                     // https://tools.ietf.org/html/rfc2812#section-2.3.1.
-                    {
-                        let mut server = server.lock().unwrap();
-                        if !server.nicknames.insert(nick.clone()) {
-                            return vec![
-                                message_builder
-                                    .with_command(messages::Command::Resp(
-                                        messages::responses::Response::ERR_NICKNAMEINUSE,
-                                    ))
-                                    .build(),
-                            ];
-                        }
-                        let mut client = client.lock().unwrap();
-                        client.nick = Some(nick.clone());
-
-                        match maybe_welcome_sequence(&server, &client, message_builder) {
-                            Some(s) => s,
-                            None => Vec::new(),
-                        }
-                    }
-                }
-                &messages::requests::Request::USER => {
-                    if message.params.len() < 4 {
+                    let mut server = server.lock().unwrap();
+                    if !server.nicknames.insert(nick.clone()) {
                         return vec![
-                            message_builder
-                                .with_command(messages::Command::Resp(
-                                    messages::responses::Response::ERR_NEEDMOREPARAMS,
-                                ))
-                                .build(),
+                            messages::Message {
+                                prefix: server_prefix,
+                                command: messages::Command::Resp(
+                                    messages::Response::ERR_NICKNAMEINUSE
+                                ),
+                            },
                         ];
                     }
+                    let mut client = client.lock().unwrap();
+                    client.nick = Some(nick.clone());
 
-                    if message.params[1] != "0" || message.params[2] != "*" {
+                    maybe_welcome_sequence(&server, &client, server_prefix)
+                }
+
+                messages::Request::USER {
+                    username: username,
+                    mode: mode,
+                    unused: unused,
+                    realname: realname,
+                } => {
+                    /*if message.params[1] != "0" || message.params[2] != "*" {
                         warn!(
                             "USER command {:?}, second and third param unknown.",
                             message.command
                         );
-                    }
+                    }*/
 
-                    {
-                        let mut client = client.lock().unwrap();
-                        client.user = Some(UserData {
-                            username: message.params[0].clone(),
-                            realname: message.params[3].clone(),
-                        });
+                    let mut client = client.lock().unwrap();
+                    client.user = Some(UserData {
+                        username: username,
+                        realname: realname,
+                    });
 
-                        match maybe_welcome_sequence(
-                            &*server.lock().unwrap(),
-                            &client,
-                            message_builder,
-                        ) {
-                            Some(s) => s,
-                            None => Vec::new(),
-                        }
-                    }
+                    maybe_welcome_sequence(&*server.lock().unwrap(), &client, server_prefix)
                 }
+
                 u @ _ => {
                     error!("Response to {:?} not yet implemented.", u);
                     Vec::new()
                 }
-                _ => unimplemented!(),
             }
         }
         _ => {
-            warn!("{:?} isn't a client request. Dropping", message.command);
+            error!("{:?} isn't a client request. Dropping", message.command);
             Vec::new()
         }
-    }*/
+    }
 }
 
 // Returns WELCOME sequence if client has successfully registered.
 fn maybe_welcome_sequence(
     server: &Server,
     client: &ConnectionData,
-) -> Option<Vec<messages::Message>> {
+    server_prefix: Option<String>,
+) -> Vec<messages::Message> {
     if client.user.is_none() || client.nick.is_none() {
-        return None;
+        return Vec::new();
     }
 
     unimplemented!()
