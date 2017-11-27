@@ -1,10 +1,11 @@
-mod responses;
-mod requests;
+// mod responses;
+// mod requests;
 
-pub use self::responses::Response;
-pub use self::requests::Request;
+// pub use self::responses::Response;
+// pub use self::requests::Request;
 
 use std;
+use std::collections::HashSet;
 use std::fmt::{self, Write};
 use std::str;
 
@@ -27,16 +28,30 @@ pub struct ParseError {
     kind: ParseErrorKind,
 }
 
-#[derive(Debug)]
+fn message_prefix_serializer<S>(t: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: ser::Serializer,
+{
+    match t {
+        &Some(ref prefix) => serializer.serialize_str(&format!(":{} ", prefix)),
+        // TODO(lazau): Figure out how to return S::Ok.
+        // For not rely on the fact that serializing unit produces nothing.
+        &None => serializer.serialize_unit(),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(serialize_with = "message_prefix_serializer")]
     pub prefix: Option<String>,
     pub command: Command,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum Command {
-    Req(requests::Request),
-    Resp(responses::Response),
+    Req(Request),
+    Resp(Response),
 }
 
 impl ParseError {
@@ -70,86 +85,491 @@ impl serde::ser::Error for ParseError {
     }
 }
 
-impl str::FromStr for Message {
-    type Err = ParseError;
-    // RFC 1459 2
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 1 || s.len() > 510 {
-            return Err(ParseError::new(ParseErrorKind::Other, "bad command length"));
-        }
-
-        let mut remainder: &str = &s.trim_right();
-        debug!("Processing {:?}", remainder);
-
-        let mut prefix: Option<String> = None;
-        if remainder.starts_with(':') {
-            match remainder.find(' ') {
-                Some(idx) => {
-                    prefix = Some(remainder[0..idx].to_string());
-                    remainder = &remainder[idx + 1..];
-                }
-                None => {
-                    return Err(ParseError::new(
-                        ParseErrorKind::NoCommand,
-                        "only prefix given",
-                    ));
-                }
-            }
-        }
-        if remainder.len() < 1 {
-            return Err(ParseError::new(
-                ParseErrorKind::NoCommand,
-                "no command specified",
-            ));
-        }
-
-        let command: Command = Command::Req(remainder.parse::<Request>()?);
-        debug!(
-            "Parsed {} to prefix: [{:?}]; command: [{:?}].",
-            s,
-            prefix,
-            command,
-        );
-
-        Ok(Message {
-            prefix: prefix,
-            command: command,
-        })
-    }
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct UserModes {
+    //modes: HashSet<UserMode>,
+    modes: UserMode,
 }
 
-impl fmt::Display for Message {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(ref prefix) = self.prefix {
-            assert!(prefix.find(' ').is_none());
-            write!(f, ":{} ", prefix)?;
-        }
-        match self.command {
-            Command::Req(ref r) => write!(f, "{}", r)?,
-            Command::Resp(ref r) => write!(f, "{}", r)?,
-        };
-        Ok(())
-    }
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum UserMode {
+    O,
+    P,
+    S,
+    I,
+    T,
+    N,
+    M,
+    L,
+    B,
+    V,
+    K,
 }
 
-pub fn serialize_params(p: &Vec<String>) -> Result<String, std::fmt::Error> {
-    if p.len() == 0 {
-        return Ok("".to_string());
-    }
-    let mut out = String::new();
-    for o in p.iter().take(p.len() - 1) {
-        // TODO(lazau): Maybe just split it into more params rather than panicking?
-        assert!(
-            o.find(' ').is_none(),
-            "generating params list with space in non-trailing param"
-        );
-        write!(out, "{} ", o)?;
-    }
-    write!(out, ":{}", p[p.len() - 1])?;
-    return Ok(out);
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct ChannelModes {
+    //modes: HashSet<ChannelMode>,
+    modes: ChannelMode,
 }
 
-#[derive(Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum ChannelMode {
+    I,
+    S,
+    W,
+    O,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum ModeModifier {
+    Add,
+    Sub,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum RequestedMode {
+    Channel {
+        channel: String,
+        op: ModeModifier,
+        modes: ChannelMode,
+        limit: Option<String>,
+        user: Option<String>,
+        ban_mask: Option<String>,
+    },
+    User {
+        nickname: String,
+        op: ModeModifier,
+        modes: UserModes,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum StatsQuery {
+    C,
+    H,
+    I,
+    K,
+    L,
+    M,
+    O,
+    Y,
+    U,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+enum JoinChannels {
+    Channels(Vec<String>),
+    KeyedChannels(Vec<(String, String)>),
+}
+
+// RFC 1459 4, 5. RFC 2812.
+#[allow(non_snake_case)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum Request {
+    // 4.1 Connection Registration.
+    NICK { nickname: String },
+    PASS { password: String },
+    USER {
+        username: String,
+        mode: UserMode,
+        unused: String,
+        realname: String,
+    },
+    SERVER {
+        servername: String,
+        hopcount: u64,
+        token: u64,
+        info: String,
+    },
+    OPER { name: String, password: String },
+    QUIT { message: Option<String> },
+    SQUIT { server: String, comment: String },
+
+    // 4.2 Channel Operations.
+    JOIN {
+        part_all: bool,
+        channels: JoinChannels,
+    },
+    PART {
+        channels: Vec<String>,
+        message: Option<String>,
+    },
+    // TODO(lazau): Verify.
+    MODE { mode: RequestedMode },
+    TOPIC {
+        channel: String,
+        topic: Option<String>,
+    },
+    NAMES { channels: Vec<String> },
+    LIST {
+        channels: Option<Vec<String>>,
+        elist: Option<Vec<String>>,
+    },
+    INVITE { nickname: String, channel: String },
+    KICK {
+        channel: Vec<String>,
+        user: Vec<String>,
+        comment: Option<String>,
+    },
+
+    // 4.3 Server queries and commands.
+    VERSION { target: Option<String> },
+    STATS {
+        query: Option<StatsQuery>,
+        target: Option<String>,
+    },
+    // TODO(lazau): Server mask should be a type.
+    LINKS {
+        remote_server: Option<String>,
+        server_mask: Option<String>,
+    },
+    TIME { target: Option<String> },
+    CONNECT {
+        target: String,
+        port: u32,
+        remote: Option<String>,
+    },
+    TRACE { target: Option<String> },
+    ADMIN { target: Option<String> },
+    INFO { target: Option<String> },
+
+    // 4.4 Sending messages.
+    PRIVMSG { targets: Vec<String>, text: String },
+    NOTICE { targets: Vec<String>, text: String },
+
+    // 4.5 User based queries.
+    WHO { mask: String, operators: bool },
+    WHOIS {
+        target: Option<String>,
+        masks: Vec<String>,
+    },
+    WHOWAS {
+        nicknames: Vec<String>,
+        max: Option<i64>,
+        target: Option<String>,
+    },
+
+    // 4.6 Misc.
+    KILL { nickname: String, comment: String },
+    PING {
+        server1: String,
+        server2: Option<String>,
+    },
+    PONG {
+        daemon1: String,
+        daemon2: Option<String>,
+    },
+    ERROR { message: String },
+
+    // 5 Optionals.
+    AWAY { message: Option<String> },
+    REHASH,
+    RESTART,
+    SUMMON {
+        user: String,
+        target: Option<String>,
+        channel: Option<String>,
+    },
+    USERS { target: Option<String> },
+    WALLOPS { text: String },
+    USERHOST { nicknames: Vec<String> },
+    ISON { nicknames: Vec<String> },
+}
+
+// RFC 1459 6
+#[allow(non_camel_case_types)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum Response {
+    // 6.1 Error replies.
+    #[serde(rename = "401")]
+    ERR_NOSUCHNICK,
+    #[serde(rename = "402")]
+    ERR_NOSUCHSERVER,
+    #[serde(rename = "403")]
+    ERR_NOSUCHCHANNEL,
+    #[serde(rename = "404")]
+    ERR_CANNOTSENDTOCHAN,
+    #[serde(rename = "405")]
+    ERR_TOOMANYCHANNELS,
+    #[serde(rename = "406")]
+    ERR_WASNOSUCHNICK,
+    #[serde(rename = "407")]
+    ERR_TOOMANYTARGETS,
+    #[serde(rename = "409")]
+    ERR_NOORIGIN,
+    #[serde(rename = "411")]
+    ERR_NORECIPIENT,
+    #[serde(rename = "412")]
+    ERR_NOTEXTTOSEND,
+    #[serde(rename = "413")]
+    ERR_NOTOPLEVEL,
+    #[serde(rename = "414")]
+    ERR_WILDTOPLEVEL,
+    #[serde(rename = "421")]
+    ERR_UNKNOWNCOMMAND,
+    #[serde(rename = "422")]
+    ERR_NOMOTD,
+    #[serde(rename = "423")]
+    ERR_NOADMININFO,
+    #[serde(rename = "424")]
+    ERR_FILEERROR,
+    #[serde(rename = "431")]
+    ERR_NONICKNAMEGIVEN,
+    #[serde(rename = "432")]
+    ERR_ERRONEUSNICKNAME,
+    #[serde(rename = "433")]
+    ERR_NICKNAMEINUSE,
+    #[serde(rename = "436")]
+    ERR_NICKCOLLISION,
+    #[serde(rename = "441")]
+    ERR_USERNOTINCHANNEL,
+    #[serde(rename = "442")]
+    ERR_NOTONCHANNEL,
+    #[serde(rename = "443")]
+    ERR_USERONCHANNEL,
+    #[serde(rename = "444")]
+    ERR_NOLOGIN,
+    #[serde(rename = "445")]
+    ERR_SUMMONDISABLED,
+    #[serde(rename = "446")]
+    ERR_USERSDISABLED,
+    #[serde(rename = "451")]
+    ERR_NOTREGISTERED,
+    #[serde(rename = "461")]
+    ERR_NEEDMOREPARAMS,
+    #[serde(rename = "462")]
+    ERR_ALREADYREGISTRED,
+    #[serde(rename = "463")]
+    ERR_NOPERMFORHOST,
+    #[serde(rename = "464")]
+    ERR_PASSWDMISMATCH,
+    #[serde(rename = "465")]
+    ERR_YOUREBANNEDCREEP,
+    #[serde(rename = "467")]
+    ERR_KEYSET,
+    #[serde(rename = "471")]
+    ERR_CHANNELISFULL,
+    #[serde(rename = "472")]
+    ERR_UNKNOWNMODE,
+    #[serde(rename = "473")]
+    ERR_INVITEONLYCHAN,
+    #[serde(rename = "474")]
+    ERR_BANNEDFROMCHAN,
+    #[serde(rename = "475")]
+    ERR_BADCHANNELKEY,
+    #[serde(rename = "481")]
+    ERR_NOPRIVILEGES,
+    #[serde(rename = "482")]
+    ERR_CHANOPRIVSNEEDED,
+    #[serde(rename = "483")]
+    ERR_CANTKILLSERVER,
+    #[serde(rename = "491")]
+    ERR_NOOPERHOST,
+    #[serde(rename = "501")]
+    ERR_UMODEUNKNOWNFLAG,
+    #[serde(rename = "502")]
+    ERR_USERSDONTMATCH,
+
+    // 6.2 Command responses.
+    #[serde(rename = "300")]
+    RPL_NONE,
+    #[serde(rename = "302")]
+    RPL_USERHOST,
+    #[serde(rename = "303")]
+    RPL_ISON,
+    #[serde(rename = "301")]
+    RPL_AWAY,
+    #[serde(rename = "305")]
+    RPL_UNAWAY,
+    #[serde(rename = "306")]
+    RPL_NOWAWAY,
+    #[serde(rename = "311")]
+    RPL_WHOISUSER,
+    #[serde(rename = "312")]
+    RPL_WHOISSERVER,
+    #[serde(rename = "313")]
+    RPL_WHOISOPERATOR,
+    #[serde(rename = "317")]
+    RPL_WHOISIDLE,
+    #[serde(rename = "318")]
+    RPL_ENDOFWHOIS,
+    #[serde(rename = "319")]
+    RPL_WHOISCHANNELS,
+    #[serde(rename = "314")]
+    RPL_WHOWASUSER,
+    #[serde(rename = "369")]
+    RPL_ENDOFWHOWAS,
+    #[serde(rename = "321")]
+    RPL_LISTSTART,
+    #[serde(rename = "322")]
+    RPL_LIST,
+    #[serde(rename = "323")]
+    RPL_LISTEND,
+    #[serde(rename = "324")]
+    RPL_CHANNELMODEIS,
+    #[serde(rename = "331")]
+    RPL_NOTOPIC,
+    #[serde(rename = "332")]
+    RPL_TOPIC,
+    #[serde(rename = "341")]
+    RPL_INVITING,
+    #[serde(rename = "342")]
+    RPL_SUMMONING,
+    #[serde(rename = "351")]
+    RPL_VERSION,
+    #[serde(rename = "352")]
+    RPL_WHOREPLY,
+    #[serde(rename = "315")]
+    RPL_ENDOFWHO,
+    #[serde(rename = "353")]
+    RPL_NAMREPLY,
+    #[serde(rename = "366")]
+    RPL_ENDOFNAMES,
+    #[serde(rename = "364")]
+    RPL_LINKS,
+    #[serde(rename = "365")]
+    RPL_ENDOFLINKS,
+    #[serde(rename = "367")]
+    RPL_BANLIST,
+    #[serde(rename = "368")]
+    RPL_ENDOFBANLIST,
+    #[serde(rename = "371")]
+    RPL_INFO,
+    #[serde(rename = "374")]
+    RPL_ENDOFINFO,
+    #[serde(rename = "375")]
+    RPL_MOTDSTART,
+    #[serde(rename = "372")]
+    RPL_MOTD,
+    #[serde(rename = "376")]
+    RPL_ENDOFMOTD,
+    #[serde(rename = "381")]
+    RPL_YOUREOPER,
+    #[serde(rename = "382")]
+    RPL_REHASHING,
+    #[serde(rename = "391")]
+    RPL_TIME,
+    #[serde(rename = "392")]
+    RPL_USERSSTART,
+    #[serde(rename = "393")]
+    RPL_USERS,
+    #[serde(rename = "394")]
+    RPL_ENDOFUSERS,
+    #[serde(rename = "395")]
+    RPL_NOUSERS,
+    #[serde(rename = "200")]
+    RPL_TRACELINK,
+    #[serde(rename = "201")]
+    RPL_TRACECONNECTING,
+    #[serde(rename = "202")]
+    RPL_TRACEHANDSHAKE,
+    #[serde(rename = "203")]
+    RPL_TRACEUNKNOWN,
+    #[serde(rename = "204")]
+    RPL_TRACEOPERATOR,
+    #[serde(rename = "205")]
+    RPL_TRACEUSER,
+    #[serde(rename = "206")]
+    RPL_TRACESERVER,
+    #[serde(rename = "208")]
+    RPL_TRACENEWTYPE,
+    #[serde(rename = "261")]
+    RPL_TRACELOG,
+    #[serde(rename = "211")]
+    RPL_STATSLINKINFO,
+    #[serde(rename = "212")]
+    RPL_STATSCOMMANDS,
+    #[serde(rename = "213")]
+    RPL_STATSCLINE,
+    #[serde(rename = "214")]
+    RPL_STATSNLINE,
+    #[serde(rename = "215")]
+    RPL_STATSILINE,
+    #[serde(rename = "216")]
+    RPL_STATSKLINE,
+    #[serde(rename = "218")]
+    RPL_STATSYLINE,
+    #[serde(rename = "219")]
+    RPL_ENDOFSTATS,
+    #[serde(rename = "241")]
+    RPL_STATSLLINE,
+    #[serde(rename = "242")]
+    RPL_STATSUPTIME,
+    #[serde(rename = "243")]
+    RPL_STATSOLINE,
+    #[serde(rename = "244")]
+    RPL_STATSHLINE,
+    #[serde(rename = "221")]
+    RPL_UMODEIS,
+    #[serde(rename = "251")]
+    RPL_LUSERCLIENT,
+    #[serde(rename = "252")]
+    RPL_LUSEROP,
+    #[serde(rename = "253")]
+    RPL_LUSERUNKNOWN,
+    #[serde(rename = "254")]
+    RPL_LUSERCHANNELS,
+    #[serde(rename = "255")]
+    RPL_LUSERME,
+    #[serde(rename = "256")]
+    RPL_ADMINME,
+    #[serde(rename = "257")]
+    RPL_ADMINLOC1,
+    #[serde(rename = "258")]
+    RPL_ADMINLOC2,
+    #[serde(rename = "259")]
+    RPL_ADMINEMAIL,
+
+    // 6.3 Reserved.
+    #[serde(rename = "209")]
+    RPL_TRACECLASS,
+    #[serde(rename = "217")]
+    RPL_STATSQLINE,
+    #[serde(rename = "231")]
+    RPL_SERVICEINFO,
+    #[serde(rename = "232")]
+    RPL_ENDOFSERVICES,
+    #[serde(rename = "233")]
+    RPL_SERVICE,
+    #[serde(rename = "234")]
+    RPL_SERVLIST,
+    #[serde(rename = "235")]
+    RPL_SERVLISTEND,
+    #[serde(rename = "316")]
+    RPL_WHOISCHANOP,
+    #[serde(rename = "361")]
+    RPL_KILLDONE,
+    #[serde(rename = "362")]
+    RPL_CLOSING,
+    #[serde(rename = "363")]
+    RPL_CLOSEEND,
+    #[serde(rename = "373")]
+    RPL_INFOSTART,
+    #[serde(rename = "384")]
+    RPL_MYPORTIS,
+    #[serde(rename = "466")]
+    ERR_YOUWILLBEBANNED,
+    #[serde(rename = "476")]
+    ERR_BADCHANMASK,
+    #[serde(rename = "492")]
+    ERR_NOSERVICEHOST,
+
+    // RFC 2812 5.1 Command responses.
+    #[serde(rename = "001")]
+    RPL_WELCOME { message: Option<String> },
+    #[serde(rename = "002")]
+    RPL_YOURHOST,
+    #[serde(rename = "003")]
+    RPL_CREATED,
+    #[serde(rename = "004")]
+    RPL_MYINFO,
+    #[serde(rename = "005")]
+    RPL_ISUPPORT,
+    #[serde(rename = "010")]
+    RPL_BOUNCE,
+}
+
+#[derive(Default, Debug)]
 pub struct IRCSerializer {
     output: String,
     last_colon: Option<usize>,
@@ -258,7 +678,7 @@ impl<'a> ser::Serializer for &'a mut IRCSerializer {
         variant_index: u32,
         variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        self.serialize_str(variant)
     }
 
     fn serialize_newtype_struct<T: ?Sized>(
@@ -282,6 +702,12 @@ impl<'a> ser::Serializer for &'a mut IRCSerializer {
     where
         T: Serialize,
     {
+        println!(
+            "name; {} variant_index: {} variatn: {}",
+            name,
+            variant_index,
+            variant
+        );
         unimplemented!()
     }
 
@@ -473,19 +899,11 @@ impl<'a> ser::SerializeStruct for &'a mut IRCSerializer {
     where
         T: ?Sized + Serialize,
     {
-        unimplemented!()
-        /*if !self.output.ends_with('{') {
-            self.output += ",";
-        }
-        key.serialize(&mut **self)?;
-        self.output += ":";
-        value.serialize(&mut **self)*/
+        value.serialize(&mut **self)
     }
 
     fn end(self) -> std::result::Result<Self::Ok, Self::Error> {
-        unimplemented!()
-        /*self.output += "}";
-        Ok(())*/
+        Ok(())
     }
 }
 
@@ -495,7 +913,7 @@ impl<'a> ser::SerializeStructVariant for &'a mut IRCSerializer {
 
     fn serialize_field<T>(
         &mut self,
-        key: &'static str,
+        _key: &'static str,
         value: &T,
     ) -> std::result::Result<Self::Ok, Self::Error>
     where
@@ -503,12 +921,13 @@ impl<'a> ser::SerializeStructVariant for &'a mut IRCSerializer {
     {
         let initial_len = self.output.as_bytes().len();
         self.output += " :";
-        let new_colon_location = self.output.as_bytes().len() - 1;
+        let mut new_colon_location = self.output.as_bytes().len() - 1;
         let after_space_len = self.output.as_bytes().len();
         value.serialize(&mut **self)?;
         // If value produced a string, remove the last colon, otherwise trim the " :" string added.
         if after_space_len != self.output.as_bytes().len() {
             if let Some(last_colon_pos) = self.last_colon {
+                new_colon_location -= 1;
                 unsafe {
                     self.output.as_mut_vec().remove(last_colon_pos);
                 }
@@ -531,77 +950,102 @@ impl<'a> ser::SerializeStructVariant for &'a mut IRCSerializer {
 
 #[cfg(test)]
 mod test {
-    use super::{Command, Message, Request};
+    use super::{to_string, Message, Command, Request, Response};
 
-    macro_rules! test_message_fail {
-        ($name:ident, $s:expr) => {
-            #[test]
-            fn $name() {
-                assert!((&format!("{}\r\n", $s)).parse::<Message>().is_err());
-            }
-        }
-    }
-    macro_rules! test_message_pass {
-        ($name:ident, $input:expr, Message {
-            prefix: $prefix:expr,
-            command: $command:expr,
-            params: [$($params:expr),*],
-        }) => {
-            #[test]
-            fn $name() {
-                let s = (&format!("{}\r\n",$input)).parse::<Message>().unwrap();
-                let pf = $prefix.to_string();
-                if pf.len() == 0 {
-                    assert!(s.prefix.is_none());
-                } else {
-                    assert_eq!(s.prefix.unwrap(), $prefix.to_string());
-                }
-                assert_eq!(s.command, $command);
-                let params:Vec<&str> = vec![$($params),*];
-                let expect :Vec<String> = params.iter().map(|s| s.to_string()).collect();
-                assert_eq!(expect.len(), s.params.len());
-                expect.iter().zip(s.params.iter()).for_each(|p| assert_eq!(p.0, p.1));
-            }
+    macro_rules! verify_serialize{
+        ($serialized:expr, $message:expr) => {
+            assert_eq!($serialized.to_string(), to_string(&$message).unwrap());
         }
     }
 
-    test_message_fail!(empty, "");
-    test_message_fail!(just_prefix, ":lazau");
+    #[test]
+    fn test_serialize() {
+        verify_serialize!(
+            "NICK :lazau",
+            Message {
+                prefix: None,
+                command: Command::Req(Request::NICK { nickname: "lazau".to_string() }),
+            }
+        );
 
-    test_message_pass!(
-        hello_world,
-        "NICK world",
-        Message {
-            prefix: "",
-            command: Command::Req(Request::NICK),
-            params: ["world"],
-        }
-    );
-    test_message_pass!(
-        empty_param,
-        "PASS",
-        Message {
-            prefix: "",
-            command: Command::Req(Request::PASS),
-            params: [],
-        }
-    );
-    test_message_pass!(
-        empty_param_trailer,
-        "QUIT :",
-        Message {
-            prefix: "",
-            command: Command::Req(Request::QUIT),
-            params: [],
-        }
-    );
-    test_message_pass!(
-        full,
-        ":lazau CONNECT server server2 :server 3 5 6",
-        Message {
-            prefix: ":lazau",
-            command: Command::Req(Request::CONNECT),
-            params: ["server", "server2", "server 3 5 6"],
-        }
-    );
+        verify_serialize!(
+            "QUIT",
+            Message {
+                prefix: None,
+                command: Command::Req(Request::QUIT { message: None }),
+            }
+        );
+
+        verify_serialize!(
+            "QUIT :quit_message",
+            Message {
+                prefix: None,
+                command: Command::Req(Request::QUIT { message: Some("quit_message".to_string()) }),
+            }
+        );
+
+        verify_serialize!(
+            "PART :channel_a,channel_b,channel_c",
+            Message {
+                prefix: None,
+                command: Command::Req(Request::PART {
+                    channels: vec![
+                        "channel_a".to_string(),
+                        "channel_b".to_string(),
+                        "channel_c".to_string(),
+                    ],
+                    message: None,
+                }),
+            }
+        );
+
+        verify_serialize!(
+            ":irc.mozilla.org PART channel_11 :A parting message",
+            Message {
+                prefix: Some("irc.mozilla.org".to_string()),
+                command: Command::Req(Request::PART {
+                    channels: vec!["channel_11".to_string()],
+                    message: Some("A parting message".to_string()),
+                }),
+            }
+        );
+
+        verify_serialize!(
+            ":WiZ CONNECT eff.org 6667 :csd.bu.edu",
+            Message {
+                prefix: Some("WiZ".to_string()),
+                command: Command::Req(Request::CONNECT {
+                    target: "eff.org".to_string(),
+                    port: 6667,
+                    remote: Some("csd.bu.edu".to_string()),
+                }),
+            }
+        );
+
+        verify_serialize!(
+            ":irc.freenode.net 461",
+            Message {
+                prefix: Some("irc.freenode.net".to_string()),
+                command: Command::Resp(Response::ERR_NEEDMOREPARAMS),
+            }
+        );
+
+        verify_serialize!(
+            ":irc.freenode.net 001",
+            Message {
+                prefix: Some("irc.freenode.net".to_string()),
+                command: Command::Resp(Response::RPL_WELCOME { message: None }),
+            }
+        );
+
+        verify_serialize!(
+            ":irc.freenode.net 001 :Welcome to the network, friend!",
+            Message {
+                prefix: Some("irc.freenode.net".to_string()),
+                command: Command::Resp(Response::RPL_WELCOME {
+                    message: Some("Welcome to the network, friend!".to_string()),
+                }),
+            }
+        );
+    }
 }

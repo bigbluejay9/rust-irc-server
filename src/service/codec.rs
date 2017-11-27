@@ -15,8 +15,8 @@ impl Encoder for Utf8CrlfCodec {
     type Error = io::Error;
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
         for message in item.iter() {
-            dst.extend(format!("{}", message).as_bytes());
-            dst.extend(b"\r\n");
+            // TODO(lazau): Don't unwrap.
+            dst.extend(messages::to_string(&message).unwrap().as_bytes());
         }
         Ok(())
     }

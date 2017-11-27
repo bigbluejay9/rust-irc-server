@@ -164,7 +164,8 @@ fn process_message(
         server
     );
 
-    let message;
+    unimplemented!()
+    /*let message;
     match req.parse::<messages::Message>() {
         Ok(m) => message = m,
         Err(ref e) => {
@@ -176,7 +177,7 @@ fn process_message(
     match message.command {
         messages::Command::Req(ref r) => {
             match r {
-                /*&messages::requests::Request::PASS => Vec::new(),//Some(req),
+                &messages::requests::Request::PASS => Vec::new(),//Some(req),
                 &messages::requests::Request::NICK => {
                     if message.params.len() == 0 {
                         return vec![
@@ -249,7 +250,7 @@ fn process_message(
                 u @ _ => {
                     error!("Response to {:?} not yet implemented.", u);
                     Vec::new()
-                }*/
+                }
                 _ => unimplemented!(),
             }
         }
@@ -257,7 +258,7 @@ fn process_message(
             warn!("{:?} isn't a client request. Dropping", message.command);
             Vec::new()
         }
-    }
+    }*/
 }
 
 // Returns WELCOME sequence if client has successfully registered.
