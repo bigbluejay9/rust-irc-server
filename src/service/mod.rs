@@ -36,7 +36,6 @@ pub fn start(addr: SocketAddr) {
         let server = Arc::clone(&server);
         // Create client connection.
         handle.spawn(thread_pool.spawn_fn(move || {
-            debug!("Accepting connection: {:?}, {:?}.", stream, addr);
             let client = Arc::new(Mutex::new(ConnectionData {
                 remote_addr: addr,
                 nick: None,
@@ -57,7 +56,17 @@ pub fn start(addr: SocketAddr) {
 
             let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
             stream
-                .map(|s| ClientEvent::Socket(s))
+                .map(|line| { // ** Serialization future.
+                    let message: Result<messages::Message, messages::DeserializerError> = messages::from_str(&line);
+                    match message {
+                        Ok(m) => ClientEvent::Message(m),
+                        Err(ref e) =>  {
+                            warn!("Failed to parse & deserialize message [{}]: {:?}.", line, e);
+                            ClientEvent::UpstreamError
+                        }
+                    }
+
+                })
                 .select(rx.then(|e| {
                     Ok(ClientEvent::Broadcast(
                         e.expect("client channel rx error. should never happen."),
@@ -65,27 +74,31 @@ pub fn start(addr: SocketAddr) {
                 }))
                 .then(move |event| {
                     // ** Process future.
-                    debug!("Connection event: {:?}.", event);
+                    trace!("Connection event: {:?}.", event);
                     if event.is_err() {
                         let err = event.err().unwrap();
-                        warn!("Upstream error: {:?}.", err);
+                        error!("Unexpected upstream error: {:?}.", err);
                         return future::err(err);
                     }
                     let server_prefix =
                         Some(hostname::get_hostname().expect("unable to get hostname"));
 
                     let res = match event.unwrap() {
-                        ClientEvent::Socket(s) => {
+                        ClientEvent::Message(m) => {
                             process_message(
                                 Arc::clone(&server_handle),
                                 Arc::clone(&client_handle),
                                 server_prefix,
-                                s,
+                                m,
                             )
                         }
+
                         ClientEvent::Broadcast(_b) => {
                             unimplemented!("Unimplemented branch arm - broadcast message.");
                         }
+
+                        // No messages to produce in the case of an upstream error.
+                        ClientEvent::UpstreamError => Vec::new(),
                     };
                     future::ok(res)
                 })
@@ -95,7 +108,7 @@ pub fn start(addr: SocketAddr) {
                         // TODO(lazau): Perform 512 max line size here.
                         for m in messages {
                             // TODO(lazau): Convert serialization error to future::err.
-                            result.push(messages::Serialize(&m).unwrap());
+                            result.push(messages::to_string(&m).unwrap());
                         }
                         future::ok(result)
                     },
@@ -142,8 +155,9 @@ struct Server {
 // A union of socket events and server-wide events.
 #[derive(Debug)]
 enum ClientEvent {
-    Socket(String),
+    Message(messages::Message),
     Broadcast(String),
+    UpstreamError,
 }
 
 #[derive(Debug)]
@@ -163,9 +177,9 @@ fn process_message(
     server: Arc<Mutex<Server>>,
     client: Arc<Mutex<ConnectionData>>,
     server_prefix: Option<String>,
-    req: String,
+    req: messages::Message,
 ) -> Vec<messages::Message> {
-    debug!(
+    trace!(
         "Processing request [{:?}].\nClient state: {:?}.\nServer state: {:?}.\nServer prefix: {:?}.",
         req,
         client,
@@ -173,19 +187,7 @@ fn process_message(
         server_prefix
     );
 
-    let message = messages::Message {
-        prefix: None,
-        command: messages::Command::Resp(messages::Response::ERR_NICKNAMEINUSE),
-    };
-    /*match req.parse::<messages::Message>() {
-        Ok(m) => message = m,
-        Err(ref e) => {
-            warn!("Bad client message [{:?}]: {:?}.", req, e);
-            return Vec::new();
-        }
-    };*/
-
-    match message.command {
+    match req.command {
         messages::Command::Req(r) => {
             match r {
                 messages::Request::NICK { nickname: nick } => {
@@ -209,10 +211,10 @@ fn process_message(
                 }
 
                 messages::Request::USER {
-                    username: username,
-                    mode: mode,
-                    unused: unused,
-                    realname: realname,
+                    username,
+                    mode,
+                    unused,
+                    realname,
                 } => {
                     /*if message.params[1] != "0" || message.params[2] != "*" {
                         warn!(
@@ -236,8 +238,8 @@ fn process_message(
                 }
             }
         }
-        _ => {
-            error!("{:?} isn't a client request. Dropping", message.command);
+        r @ _ => {
+            error!("{:?} isn't a client request. Dropping", r);
             Vec::new()
         }
     }
@@ -253,46 +255,26 @@ fn maybe_welcome_sequence(
         return Vec::new();
     }
 
-    unimplemented!()
-    /*Some(vec![
-        message_builder
-            .with_command(messages::Command::Resp(
-                messages::responses::Response::RPL_WELCOME,
-            ))
-            .with_param_builder(Box::new(
-                *messages::responses::WelcomeParamsBuilder::default()
-            .with_nick(client.nick.as_ref().unwrap())
-            // TODO(lazau): Network name from server configuration.
-            .with_network_name(&"<network_name>".to_string())
-            .with_user_and_host(&client.user.as_ref().unwrap().username, &client.remote_addr.to_string()),
-            ))
-            .build(),
-        message_builder
-            .with_command(messages::Command::Resp(messages::Response::RPL_YOURHOST))
-            .with_params(vec![
-                format!("{}", client.nick.as_ref().unwrap()),
-                format!(
-                    "Your host is {}, running version {}",
-                    server.hostname,
-                    server.version,
+    vec![
+        messages::Message {
+            prefix: server_prefix.clone(),
+            command: messages::Command::Resp(messages::Response::RPL_WELCOME {
+                message: Some(
+                    "Welcome to the <networkname> Network, <nick>[!<user>@<host>]".to_string(),
                 ),
-            ])
-            .build(),
-        message_builder
-            .with_command(messages::Command::Resp(messages::Response::RPL_CREATED))
-            .with_params(vec![
-                format!("{}", client.nick.as_ref().unwrap()),
-                format!(
-                    "This server was created {}",
-                    server.created.with_timezone(&chrono::offset::Local).to_rfc2822(),
-                ),
-            ])
-            .build(),
-        message_builder
-            .with_command(messages::Command::Resp(messages::Response::RPL_MYINFO))
-            .with_params(vec![
-                format!("{}", client.nick.as_ref().unwrap()).to_string(),
-            ])
-            .build(),
-    ])*/
+            }),
+        },
+        messages::Message {
+            prefix: server_prefix.clone(),
+            command: messages::Command::Resp(messages::Response::RPL_YOURHOST),
+        },
+        messages::Message {
+            prefix: server_prefix.clone(),
+            command: messages::Command::Resp(messages::Response::RPL_CREATED),
+        },
+        messages::Message {
+            prefix: server_prefix.clone(),
+            command: messages::Command::Resp(messages::Response::RPL_MYINFO),
+        },
+    ]
 }

@@ -6,8 +6,8 @@
 mod serializer;
 mod deserializer;
 
-pub use self::serializer::{to_string as Serialize, Error as SerializerError};
-pub use self::deserializer::Error as DeserializerError;
+pub use self::serializer::{to_string, Error as SerializerError};
+pub use self::deserializer::{from_str, Error as DeserializerError};
 
 use std;
 use std::fmt::{self, Write};
