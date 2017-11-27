@@ -65,7 +65,6 @@ pub fn start(addr: SocketAddr) {
                             ClientEvent::UpstreamError
                         }
                     }
-
                 })
                 .select(rx.then(|e| {
                     Ok(ClientEvent::Broadcast(

@@ -446,3 +446,27 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut IRCDeserializer<'de> {
         //self.deserialize_any(visitor)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::from_str;
+    use super::super::{Message, Command, Request, Response};
+
+    macro_rules! verify_deserialize{
+        ($deserialized:expr, $message:expr) => {
+            assert_eq!(from_str::<Message>(&$message).unwrap(), $deserialized);
+        }
+    }
+
+    #[test]
+    fn test_deserialize() {
+        // XXX
+        /*verify_deserialize!(
+            Message {
+                prefix: Some("Laza".to_string()),
+                command: Command::Req(Request::NICK { nickname: "lazau".to_string() }),
+            },
+            ":Laza NICK :lazau"
+        );*/
+    }
+}
