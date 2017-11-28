@@ -1,13 +1,8 @@
-// mod responses;
-// mod requests;
-
-// pub use self::responses::Response;
-// pub use self::requests::Request;
 mod serializer;
-mod deserializer;
+mod parser;
 
 pub use self::serializer::{to_string, Error as SerializerError};
-pub use self::deserializer::{from_str, Error as DeserializerError};
+pub use self::parser::ParseError;
 
 use std;
 use std::fmt::{self, Write};
@@ -25,64 +20,27 @@ pub enum ParseErrorKind {
     Other,
 }
 
-#[derive(Debug)]
-pub struct ParseError {
-    desc: &'static str,
-    kind: ParseErrorKind,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub struct Message {
     #[serde(serialize_with = "serializer::message_prefix_serializer")]
     pub prefix: Option<String>,
     pub command: Command,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Command {
     Req(Request),
     Resp(Response),
 }
 
-impl ParseError {
-    pub fn new(kind: ParseErrorKind, desc: &'static str) -> ParseError {
-        ParseError {
-            desc: desc,
-            kind: kind,
-        }
-    }
-}
-
-impl std::error::Error for ParseError {
-    fn description(&self) -> &str {
-        self.desc
-    }
-
-    fn cause(&self) -> Option<&std::error::Error> {
-        None
-    }
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "IRC command parse error: {}", &self.desc)
-    }
-}
-
-impl serde::ser::Error for ParseError {
-    fn custom<T: fmt::Display>(msg: T) -> Self {
-        unimplemented!()
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub struct UserModes {
     //modes: HashSet<UserMode>,
     modes: UserMode,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum UserMode {
     O,
     P,
@@ -97,13 +55,13 @@ pub enum UserMode {
     K,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub struct ChannelModes {
     //modes: HashSet<ChannelMode>,
     modes: ChannelMode,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum ChannelMode {
     I,
     S,
@@ -111,13 +69,13 @@ pub enum ChannelMode {
     O,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum ModeModifier {
     Add,
     Sub,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum RequestedMode {
     Channel {
         channel: String,
@@ -134,7 +92,7 @@ pub enum RequestedMode {
     },
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum StatsQuery {
     C,
     H,
@@ -147,7 +105,7 @@ pub enum StatsQuery {
     U,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum JoinChannels {
     Channels(Vec<String>),
     KeyedChannels(Vec<(String, String)>),
@@ -155,7 +113,7 @@ pub enum JoinChannels {
 
 // RFC 1459 4, 5. RFC 2812.
 #[allow(non_snake_case)]
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum Request {
     // 4.1 Connection Registration.
     NICK { nickname: String },
@@ -269,7 +227,7 @@ pub enum Request {
 
 // RFC 1459 6
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum Response {
     // 6.1 Error replies.
     #[serde(rename = "401")]

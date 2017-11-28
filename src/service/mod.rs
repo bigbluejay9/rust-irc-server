@@ -55,17 +55,7 @@ pub fn start(addr: SocketAddr) {
             let server_cleanup = Arc::clone(&server);
 
             let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
-            stream
-                .map(|line| { // ** Serialization future.
-                    let message: Result<messages::Message, messages::DeserializerError> = messages::from_str(&line);
-                    match message {
-                        Ok(m) => ClientEvent::Message(m),
-                        Err(ref e) =>  {
-                            warn!("Failed to parse & deserialize message [{}]: {:?}.", line, e);
-                            ClientEvent::UpstreamError
-                        }
-                    }
-                })
+            stream.map(|s| ClientEvent::Socket(s) )
                 .select(rx.then(|e| {
                     Ok(ClientEvent::Broadcast(
                         e.expect("client channel rx error. should never happen."),
@@ -83,21 +73,27 @@ pub fn start(addr: SocketAddr) {
                         Some(hostname::get_hostname().expect("unable to get hostname"));
 
                     let res = match event.unwrap() {
-                        ClientEvent::Message(m) => {
+                        ClientEvent::Socket(s) => {
+                            let message = match s.parse::<messages::Message>() {
+                                Ok(m) => m,
+                                // TODO(lazau): Maybe do some additional error processing here?
+                                Err(e) => {
+                                    warn!("Failed to parse {}: {:?}.", s, e);
+                                    return future::ok(Vec::new());
+                                }
+                                //Err(e) => return future::err(e),
+                            };
                             process_message(
                                 Arc::clone(&server_handle),
                                 Arc::clone(&client_handle),
                                 server_prefix,
-                                m,
+                                message,
                             )
                         }
 
                         ClientEvent::Broadcast(_b) => {
                             unimplemented!("Unimplemented branch arm - broadcast message.");
                         }
-
-                        // No messages to produce in the case of an upstream error.
-                        ClientEvent::UpstreamError => Vec::new(),
                     };
                     future::ok(res)
                 })
@@ -154,9 +150,8 @@ struct Server {
 // A union of socket events and server-wide events.
 #[derive(Debug)]
 enum ClientEvent {
-    Message(messages::Message),
+    Socket(String),
     Broadcast(String),
-    UpstreamError,
 }
 
 #[derive(Debug)]
