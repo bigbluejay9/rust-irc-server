@@ -1,35 +1,25 @@
 use std::{self, fmt, str};
 
-use super::{Message, Request, Response, Command, UserMode};
+use super::{Message, Request, Response, Command, UserMode, JoinChannels};
 
-#[derive(Debug)]
-pub enum ParseErrorKind {
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseError {
     NoCommand,
     UnrecognizedCommand,
-    NeedMoreParams,
-    TooManyParams,
-    ParseIntError,
+    NeedMoreParams { command: String },
     NotARequest,
     NotAResponse,
+    StringParseError,
     Other,
 }
 
-#[derive(Debug)]
-pub struct ParseError {
-    desc: &'static str,
-    pub kind: ParseErrorKind,
-}
-
-impl ParseError {
-    pub fn new(kind: ParseErrorKind, desc: &'static str) -> ParseError {
-        ParseError {
-            desc: desc,
-            kind: kind,
-        }
+impl<T: std::error::Error> std::convert::From<T> for ParseError {
+    fn from(p: T) -> Self {
+        ParseError::Other
     }
 }
 
-impl std::error::Error for ParseError {
+/*impl std::error::Error for ParseError {
     fn description(&self) -> &str {
         self.desc
     }
@@ -37,11 +27,11 @@ impl std::error::Error for ParseError {
     fn cause(&self) -> Option<&std::error::Error> {
         None
     }
-}
+}*/
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "parse error: {}", &self.desc)
+        write!(f, "parse error: {:?}", self)
     }
 }
 
@@ -65,13 +55,13 @@ impl str::FromStr for Message {
         let mut prefix = None;
         if s.starts_with(":") {
             let (a, b) = next_token(s);
-            if b.len() == 0 {
-                return Err(ParseError::new(ParseErrorKind::NoCommand, "no command"));
-            }
             remainder = b;
             prefix = Some(a[1..].to_string());
         }
 
+        if remainder.len() == 0 {
+            return Err(ParseError::NoCommand);
+        }
         let command = remainder.parse::<Command>()?;
 
         Ok(Message {
@@ -88,8 +78,8 @@ impl str::FromStr for Command {
         match s.parse::<Request>() {
             Ok(r) => request = Some(r),
             Err(e) => {
-                match e.kind {
-                    ParseErrorKind::NotARequest => request = None,
+                match e {
+                    ParseError::NotARequest => request = None,
                     _ => return Err(e),
                 };
             }
@@ -103,8 +93,8 @@ impl str::FromStr for Command {
         match s.parse::<Response>() {
             Ok(r) => response = Some(r),
             Err(e) => {
-                match e.kind {
-                    ParseErrorKind::NotAResponse => response = None,
+                match e {
+                    ParseError::NotAResponse => response = None,
                     _ => return Err(e),
                 };
             }
@@ -114,139 +104,214 @@ impl str::FromStr for Command {
             return Ok(Command::Resp(r));
         }
 
-        return Err(ParseError::new(
-            ParseErrorKind::UnrecognizedCommand,
-            "not a command",
-        ));
+        Err(ParseError::UnrecognizedCommand)
     }
 }
 
-fn verify_at_least_params<'a>(
-    p: &Vec<&'a str>,
+fn extract_params<'a>(
+    rem: &'a str,
     required: usize,
-    error: &'static str,
-) -> Result<(), ParseError> {
-    if p.len() < required {
-        return Err(ParseError::new(ParseErrorKind::NeedMoreParams, error));
+    err: &'static str,
+) -> Result<Vec<&'a str>, ParseError> {
+    let mut rem = rem;
+    let mut params: Vec<&str> = Vec::new();
+    while rem.len() > 0 {
+        // Trim leading space.
+        rem = &rem[1..];
+
+        if rem.starts_with(':') {
+            if rem.len() == 1 {
+                warn!("Empty trailing command parameter. Ignoring.")
+            } else {
+                params.push(&rem[1..]);
+            }
+            break;
+        }
+
+        let (next_param, r) = next_token(rem);
+        rem = r;
+
+        if next_param.len() == 0 {
+            warn!("Empty whitespace in parameters list: ignoring.");
+        } else {
+            params.push(next_param);
+        }
     }
-    Ok(())
+
+    if params.len() < required {
+        return Err(ParseError::NeedMoreParams { command: err.to_string() });
+    }
+
+    Ok(params)
+}
+
+// Macro to generate a value for a required field.
+macro_rules! rf {
+    ($p:expr, $idx:expr, $type:ty) => { $p[$idx].parse::<$type>()? };
+}
+
+// Macro to generate a value for as optional field.
+// Should only be used if the the optional field is at the end of the param list.
+macro_rules! of {
+    ($p:expr, $idx:expr, $type:ty) => { 
+        if $p.len() > $idx {
+            Some($p[$idx].parse::<$type>()?)
+        } else {
+            None
+        }
+    };
 }
 
 impl str::FromStr for Request {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut remainder: &str = &s;
-
-        let (command, mut remainder) = next_token(s);
-
-        let mut params: Vec<&str> = Vec::new();
-        while remainder.len() > 0 {
-            if remainder.starts_with(':') {
-                if remainder.len() == 1 {
-                    warn!("Empty trailing command parameter. Ignoring.")
-                } else {
-                    params.push(&remainder[1..]);
-                }
-                break;
-            }
-
-            let (next_param, r) = next_token(s);
-            remainder = r;
-
-            if next_param.len() == 0 {
-                warn!("Empty whitespace in command paramter detected! Ignoring.");
-            } else {
-                params.push(next_param);
-            }
-        }
+        let (command, r) = next_token(s);
 
         match command.to_uppercase().as_ref() {
+            // Unfortunately, Rust's macros aren't powerful enough to capture variants:
+            // https://stackoverflow.com/questions/37006835/building-an-enum-inside-a-macro.
             "NICK" => {
-                verify_at_least_params(&params, 1, "NICK")?;
-                Ok(Request::NICK { nickname: params[0].to_string() })
+                let p = try!(extract_params(r, 1, "NICK"));
+                Ok(Request::NICK { nickname: rf!(p, 0, String) })
             }
+
             "PASS" => {
-                verify_at_least_params(&params, 1, "PASS")?;
-                Ok(Request::PASS { password: params[0].to_string() })
+                let p = try!(extract_params(r, 1, "PASS"));
+                Ok(Request::PASS { password: rf!(p, 0, String) })
             }
+
             "USER" => {
-                verify_at_least_params(&params, 4, "USER")?;
+                let p = try!(extract_params(r, 4, "USER"));
                 Ok(Request::USER {
-                    username: params[0].to_string(),
-                    mode: params[1].parse::<UserMode>()?,
-                    unused: params[2].to_string(),
-                    realname: params[3].to_string(),
+                    username: rf!(p, 0, String),
+                    mode: rf!(p, 1, UserMode),
+                    unused: rf!(p, 2, String),
+                    realname: rf!(p, 3, String),
                 })
             }
+
             "SERVER" => {
-                verify_at_least_params(&params, 3, "USER")?;
+                let p = try!(extract_params(r, 4, "SERVER"));
                 Ok(Request::SERVER {
-                    servername: params[0].to_string(),
-                    hopcount: match params[1].parse::<u64>() {
-                        Ok(h) => h,
-                        Err(_) => {
-                            return Err(ParseError::new(
-                                ParseErrorKind::ParseIntError,
-                                "hopcount not an int",
-                            ))
-                        }
-                    },
-                    token: unimplemented!(),
-                    info: params[2].to_string(),
+                    servername: rf!(p, 0, String),
+                    hopcount: rf!(p, 1, u64),
+                    token: rf!(p, 2, u64),
+                    info: rf!(p, 3, String),
                 })
             }
+
             "OPER" => {
-                verify_at_least_params(&params, 2, "OPER")?;
+                let p = try!(extract_params(r, 2, "OPER"));
                 Ok(Request::OPER {
-                    name: params[0].to_string(),
-                    password: params[1].to_string(),
+                    name: rf!(p, 0, String),
+                    password: rf!(p, 1, String),
                 })
             }
+
             "QUIT" => {
-                if params.len() == 0 {
-                    return Ok(Request::QUIT { message: None });
-                }
-                Ok(Request::QUIT { message: Some(params[0].to_string()) })
+                let p = try!(extract_params(r, 0, "QUIT"));
+                Ok(Request::QUIT { message: of!(p, 0, String) })
             }
-            /*"SQUIT" => Ok(Request::SQUIT),
-            "JOIN" => Ok(Request::JOIN),
-            "PART" => Ok(Request::PART),
-            "MODE" => Ok(Request::MODE),
-            "TOPIC" => Ok(Request::TOPIC),
-            "NAMES" => Ok(Request::NAMES),
-            "LIST" => Ok(Request::LIST),
-            "INVITE" => Ok(Request::INVITE),
-            "KICK" => Ok(Request::KICK),
-            "VERSION" => Ok(Request::VERSION),
-            "STATS" => Ok(Request::STATS),
-            "LINKS" => Ok(Request::LINKS),
-            "TIME" => Ok(Request::TIME),
-            "CONNECT" => Ok(Request::CONNECT),
-            "TRACE" => Ok(Request::TRACE),
-            "ADMIN" => Ok(Request::ADMIN),
-            "INFO" => Ok(Request::INFO),
-            "PRIVMSG" => Ok(Request::PRIVMSG),
-            "NOTICE" => Ok(Request::NOTICE),
-            "WHO" => Ok(Request::WHO),
-            "WHOIS" => Ok(Request::WHOIS),
-            "WHOWAS" => Ok(Request::WHOWAS),
-            "KILL" => Ok(Request::KILL),
-            "PING" => Ok(Request::PING),
-            "PONG" => Ok(Request::PONG),
-            "ERROR" => Ok(Request::ERROR),
-            "AWAY" => Ok(Request::AWAY),
-            "REHASH" => Ok(Request::REHASH),
-            "RESTART" => Ok(Request::RESTART),
-            "SUMMON" => Ok(Request::SUMMON),
-            "USERS" => Ok(Request::USERS),
-            "WALLOPS" => Ok(Request::WALLOPS),
-            "USERHOST" => Ok(Request::USERHOST),
-            "ISON" => Ok(Request::ISON),*/
-            _ => Err(ParseError::new(
-                ParseErrorKind::UnrecognizedCommand,
-                "unrecognized command",
-            )),
-            _ => unimplemented!(),
+
+            "SQUIT" => {
+                let p = try!(extract_params(r, 2, "SQUIT"));
+                Ok(Request::SQUIT {
+                    server: rf!(p, 0, String),
+                    comment: rf!(p, 1, String),
+                })
+            }
+
+            "JOIN" => {
+                let p = try!(extract_params(r, 1, "JOIN"));
+                if p.len() == 1 && p[0] == "0" {
+                    Ok(Request::JOIN {
+                        part_all: true,
+                        channels: None,
+                    })
+                } else {
+                    Ok(Request::JOIN {
+                        part_all: false,
+                        channels: Some(r.parse::<JoinChannels>()?),
+                    })
+                }
+            }
+
+            "PART" => {
+                let p = try!(extract_params(r, 1, "PART"));
+                Ok(Request::PART {
+                    channels: rf!(p, 0, String)
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect(),
+                    message: of!(p, 1, String),
+                })
+            }
+
+            //"MODE" => Ok(Request::MODE),
+            "TOPIC" => {
+                let p = try!(extract_params(r, 1, "TOPIC"));
+                Ok(Request::TOPIC {
+                    channel: rf!(p, 0, String),
+                    topic: of!(p, 1, String),
+                })
+            }
+
+            "NAMES" => {
+                let p = try!(extract_params(r, 0, "NAMES"));
+                Ok(Request::NAMES {
+                    channels: rf!(p, 0, String)
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect(),
+                })
+            }
+
+            //"LIST" => Ok(Request::LIST),
+            //"INVITE" => Ok(Request::INVITE),
+            //"KICK" => Ok(Request::KICK),
+            "VERSION" => {
+                let p = try!(extract_params(r, 0, "VERSION"));
+                Ok(Request::VERSION { target: of!(p, 0, String) })
+            }
+            //"STATS" => Ok(Request::STATS),
+            //"LINKS" => Ok(Request::LINKS),
+            "TIME" => {
+                let p = try!(extract_params(r, 0, "TIME"));
+                Ok(Request::TIME { target: of!(p, 0, String) })
+            }
+            //"CONNECT" => Ok(Request::CONNECT),
+            "TRACE" => {
+                let p = try!(extract_params(r, 0, "TRACE"));
+                Ok(Request::TRACE { target: of!(p, 0, String) })
+            }
+
+            "ADMIN" => {
+                let p = try!(extract_params(r, 0, "ADMIN"));
+                Ok(Request::ADMIN { target: of!(p, 0, String) })
+            }
+
+            "INFO" => {
+                let p = try!(extract_params(r, 0, "INFO"));
+                Ok(Request::INFO { target: of!(p, 0, String) })
+            }
+            //"PRIVMSG" => Ok(Request::PRIVMSG),
+            //"NOTICE" => Ok(Request::NOTICE),
+            //"WHO" => Ok(Request::WHO),
+            //"WHOIS" => Ok(Request::WHOIS),
+            //"WHOWAS" => Ok(Request::WHOWAS),
+            //"KILL" => Ok(Request::KILL),
+            //"PING" => Ok(Request::PING),
+            //"PONG" => Ok(Request::PONG),
+            //"ERROR" => Ok(Request::ERROR),
+            //"AWAY" => Ok(Request::AWAY),
+            //"REHASH" => Ok(Request::REHASH),
+            //"RESTART" => Ok(Request::RESTART),
+            //"SUMMON" => Ok(Request::SUMMON),
+            //"USERS" => Ok(Request::USERS),
+            //"WALLOPS" => Ok(Request::WALLOPS),
+            //"USERHOST" => Ok(Request::USERHOST),
+            //"ISON" => Ok(Request::ISON),
+            _ => Err(ParseError::NotARequest),
         }
     }
 }
@@ -256,7 +321,7 @@ impl str::FromStr for Response {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (resp, rem) = next_token(s);
         if rem.len() > 0 {
-            unimplemented!()
+            //unimplemented!()
         }
 
         match resp.to_uppercase().as_ref() {
@@ -540,10 +605,7 @@ impl str::FromStr for Response {
             "005" => Ok(Response::RPL_ISUPPORT),
             "RPL_BOUNCE" => Ok(Response::RPL_BOUNCE),
             "010" => Ok(Response::RPL_BOUNCE),
-            _ => Err(ParseError::new(
-                ParseErrorKind::NotAResponse,
-                "not a response",
-            )),
+            _ => Err(ParseError::NotAResponse),
         }
     }
 }
@@ -555,13 +617,33 @@ impl str::FromStr for UserMode {
     }
 }
 
+impl str::FromStr for JoinChannels {
+    type Err = ParseError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        unimplemented!()
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use std::{str, slice};
+    use rand;
+    use super::ParseError;
     use super::super::{Message, Command, Request, Response};
 
-    macro_rules! verify_parse{
+    macro_rules! verify_parse {
         ($deserialized:expr, $raw:expr) => {
             assert_eq!($raw.parse::<Message>().unwrap(), $deserialized);
+        }
+    }
+
+    macro_rules! verify_noparse{
+        ($raw:expr) => {
+            assert!($raw.parse::<Message>().is_err());
+        };
+
+        ($err_kind:expr, $raw:expr) => {
+            assert_eq!($raw.parse::<Message>().err().unwrap(), $err_kind);
         }
     }
 
@@ -574,5 +656,44 @@ mod test {
             },
             ":Laza NICK :lazau"
         );
+
+        verify_parse!(
+            Message {
+                prefix: Some("Laza".to_string()),
+                command: Command::Resp(Response::ERR_NEEDMOREPARAMS),
+            },
+            ":Laza ERR_NEEDMOREPARAMS"
+        );
+
+        verify_parse!(
+            Message {
+                prefix: None,
+                command: Command::Resp(Response::ERR_NEEDMOREPARAMS),
+            },
+            "461"
+        )
+    }
+
+    #[test]
+    fn test_parse_failure() {
+        verify_noparse!(ParseError::NoCommand, ":Hello");
+        verify_noparse!(ParseError::NoCommand, ":");
+        verify_noparse!(ParseError::NoCommand, "");
+        verify_noparse!(ParseError::UnrecognizedCommand, "whatacommand");
+        verify_noparse!(ParseError::UnrecognizedCommand, ":a whatacommand sd dd :ee");
+    }
+
+    #[test]
+    fn fuzz() {
+        let mut rng = rand::thread_rng();
+        let (max_input_len, cases) = (1024, 1000);
+        for _ in 0..cases {
+            let len = rand::random::<u32>() % max_input_len;
+            let mut input = String::with_capacity(len as usize);
+            for _ in 0..len {
+                input.push(rand::random::<char>());
+            }
+            println!("Testing {} : {:?}", input, input.parse::<Message>());
+        }
     }
 }

@@ -6,6 +6,7 @@ extern crate hostname;
 #[macro_use]
 extern crate log;
 extern crate num_cpus;
+extern crate rand;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde;

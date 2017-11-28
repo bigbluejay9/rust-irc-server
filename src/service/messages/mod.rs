@@ -10,16 +10,6 @@ use std::str;
 
 use serde;
 
-#[derive(Debug)]
-pub enum ParseErrorKind {
-    NoCommand,
-    UnrecognizedCommand,
-    NeedMoreParams,
-    TooManyParams,
-    ParseIntError,
-    Other,
-}
-
 #[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub struct Message {
     #[serde(serialize_with = "serializer::message_prefix_serializer")]
@@ -137,7 +127,7 @@ pub enum Request {
     // 4.2 Channel Operations.
     JOIN {
         part_all: bool,
-        channels: JoinChannels,
+        channels: Option<JoinChannels>,
     },
     PART {
         channels: Vec<String>,
