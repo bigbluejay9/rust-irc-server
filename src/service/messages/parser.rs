@@ -105,9 +105,6 @@ fn extract_params<'a>(
     let mut rem = rem;
     let mut params: Vec<&str> = Vec::new();
     while rem.len() > 0 {
-        // Trim leading space.
-        rem = &rem[1..];
-
         if rem.starts_with(':') {
             if rem.len() == 1 {
                 warn!("Empty trailing command parameter. Ignoring.")
@@ -893,6 +890,35 @@ mod test {
                 command: Command::Req(Request::NICK { nickname: "lazau".to_string() }),
             },
             ":Laza NICK :lazau"
+        );
+
+        verify_parse!(
+            Message {
+                prefix: Some("Laza".to_string()),
+                command: Command::Req(Request::NICK { nickname: "lazau".to_string() }),
+            },
+            ":Laza NICK   :lazau"
+        );
+
+        verify_parse!(
+            Message {
+                prefix: None,
+                command: Command::Req(Request::NICK { nickname: "lazau".to_string() }),
+            },
+            "NICK      lazau"
+        );
+
+        verify_parse!(
+            Message {
+                prefix: None,
+                command: Command::Req(Request::USER {
+                    username: "d".to_string(),
+                    mode: 0,
+                    unused: "d".to_string(),
+                    realname: "g".to_string(),
+                }),
+            },
+            "USER d 0 d g"
         );
 
         verify_parse!(

@@ -1,6 +1,5 @@
 extern crate env_logger;
 extern crate getopts;
-#[macro_use]
 extern crate log;
 
 extern crate irc_server;
@@ -14,6 +13,11 @@ fn print_usage(prog: &str, opts: getopts::Options) {
     print!("{}", opts.usage(&brief));
 }
 
+fn build_socketaddr(port: u32) -> SocketAddr {
+    let addr = format!("127.0.0.1:{}", port);
+    addr.parse::<SocketAddr>().unwrap()
+}
+
 fn main() {
     env_logger::init().unwrap();
 
@@ -21,6 +25,12 @@ fn main() {
 
     let mut opts = getopts::Options::new();
     opts.optflag("h", "help", "print help menu");
+    opts.optflagopt(
+        "s",
+        "http_server_port",
+        "Optional debugging HTTP server port.",
+        "8888",
+    );
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
         Err(f) => {
@@ -33,17 +43,10 @@ fn main() {
         return;
     }
 
-    let mut addr = "127.0.0.1:".to_string();
-    addr.push_str(&matches.free[0]);
-    let socket_addr = match addr.parse::<SocketAddr>() {
-        Err(e) => {
-            print_usage(&args[0], opts);
-            println!("Bad address to listen on {}: {}.", addr, e.to_string());
-            return;
-        }
-        Ok(a) => a,
-    };
-    debug!("Socket addr {:?}.", socket_addr);
-
-    service::start(socket_addr);
+    service::start(
+        build_socketaddr(matches.free[0].parse().unwrap()),
+        matches.opt_str("s").map_or(None, |p| {
+            Some(build_socketaddr(p.parse().unwrap()))
+        }),
+    );
 }
