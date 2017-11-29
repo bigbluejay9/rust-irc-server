@@ -1,6 +1,6 @@
 use std::{self, fmt, str};
 
-use super::{Message, Request, Response, Command, UserMode, StatsQuery, RequestedMode};
+use super::{Message, Request, Response, Command, StatsQuery};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
@@ -9,13 +9,12 @@ pub enum ParseError {
     NeedMoreParams { command: String },
     NotARequest,
     NotAResponse,
-    StringParseError,
-    Other,
+    Other { desc: String },
 }
 
 impl<T: std::error::Error> std::convert::From<T> for ParseError {
     fn from(p: T) -> Self {
-        ParseError::Other
+        ParseError::Other { desc: p.description().to_string() }
     }
 }
 
@@ -174,7 +173,7 @@ impl str::FromStr for Request {
                 let p = try!(extract_params(r, 4, "USER"));
                 Ok(Request::USER {
                     username: rf!(p, 0, String),
-                    mode: rf!(p, 1, UserMode),
+                    mode: rf!(p, 1, u32),
                     unused: rf!(p, 2, String),
                     realname: rf!(p, 3, String),
                 })
@@ -251,8 +250,8 @@ impl str::FromStr for Request {
                 let p = try!(extract_params(r, 1, "MODE"));
                 Ok(Request::MODE {
                     target: rf!(p, 0, String),
-                    mode: if p.len() > 1 {
-                        Some(p[1..].join(" ").parse::<RequestedMode>()?)
+                    modespec: if p.len() > 1 {
+                        Some(p[1..].join(" "))
                     } else {
                         None
                     },
@@ -556,6 +555,7 @@ impl str::FromStr for Response {
         let (resp, rem) = next_token(s);
         if rem.len() > 0 {
             //unimplemented!()
+            error!("NOT YET IMPLEMENTED, BUT DON'T WANT IT TO CRASH");
         }
 
         match resp.to_uppercase().as_ref() {
@@ -844,24 +844,21 @@ impl str::FromStr for Response {
     }
 }
 
-impl str::FromStr for UserMode {
-    type Err = ParseError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        unimplemented!()
-    }
-}
-
-impl str::FromStr for RequestedMode {
-    type Err = ParseError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        unimplemented!()
-    }
-}
-
 impl str::FromStr for StatsQuery {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        unimplemented!()
+        match s.to_uppercase().as_ref() {
+            "C" => Ok(StatsQuery::C),
+            "H" => Ok(StatsQuery::H),
+            "I" => Ok(StatsQuery::I),
+            "K" => Ok(StatsQuery::K),
+            "L" => Ok(StatsQuery::L),
+            "M" => Ok(StatsQuery::M),
+            "O" => Ok(StatsQuery::O),
+            "U" => Ok(StatsQuery::U),
+            "Y" => Ok(StatsQuery::Y),
+            u @ _ => Ok(StatsQuery::UNKNOWN(u.to_string())),
+        }
     }
 }
 

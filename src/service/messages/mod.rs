@@ -19,12 +19,6 @@ pub enum Command {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize)]
-pub struct UserModes {
-    //modes: HashSet<UserMode>,
-    modes: UserMode,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum UserMode {
     O,
     P,
@@ -40,12 +34,6 @@ pub enum UserMode {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize)]
-pub struct ChannelModes {
-    //modes: HashSet<ChannelMode>,
-    modes: ChannelMode,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub enum ChannelMode {
     I,
     S,
@@ -53,30 +41,7 @@ pub enum ChannelMode {
     O,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
-pub enum ModeModifier {
-    Add,
-    Sub,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
-pub enum RequestedMode {
-    Channel {
-        channel: String,
-        op: ModeModifier,
-        modes: ChannelMode,
-        limit: Option<String>,
-        user: Option<String>,
-        ban_mask: Option<String>,
-    },
-    User {
-        nickname: String,
-        op: ModeModifier,
-        modes: UserModes,
-    },
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum StatsQuery {
     C,
     H,
@@ -85,8 +50,9 @@ pub enum StatsQuery {
     L,
     M,
     O,
-    Y,
     U,
+    Y,
+    UNKNOWN(String),
 }
 
 // RFC 1459 4, 5. RFC 2812.
@@ -98,7 +64,7 @@ pub enum Request {
     PASS { password: String },
     USER {
         username: String,
-        mode: UserMode,
+        mode: u32,
         unused: String,
         realname: String,
     },
@@ -132,7 +98,10 @@ pub enum Request {
     // TODO(lazau): Verify.
     MODE {
         target: String,
-        mode: Option<RequestedMode>,
+        // TODO(lazau): This needs to be fixed.
+        // https://tools.ietf.org/html/rfc2812#section-3.1.5
+        // https://tools.ietf.org/html/rfc2812#section-3.2.3
+        modespec: Option<String>,
     },
     TOPIC {
         channel: String,

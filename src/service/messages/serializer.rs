@@ -1,8 +1,11 @@
 use serde;
-use serde::ser::{self, Serialize, Serializer, SerializeSeq};
+use serde::ser::{self, Serialize, Serializer};
 
 use std;
 use std::str;
+use std::error::Error as StandardError;
+
+use super::StatsQuery;
 
 pub fn to_string<T>(value: &T) -> std::result::Result<String, Error>
 where
@@ -25,50 +28,61 @@ where
     }
 }
 
-/*impl Serialize for JoinChannels {
+impl Serialize for StatsQuery {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            &JoinChannels::Channels(ref c) => serializer.serialize_str(&c.join(",")),
-            &JoinChannels::KeyedChannels(ref c) => {
-                let (chans, keys): (Vec<String>, Vec<String>) = c.iter().cloned().unzip();
-                let mut output = chans.join(",");
-                output.push_str(" :");
-                output.push_str(&keys.join(","));
-                serializer.serialize_str(&output)
+        let string = match self {
+            &StatsQuery::C => "c",
+            &StatsQuery::H => "h",
+            &StatsQuery::I => "i",
+            &StatsQuery::K => "k",
+            &StatsQuery::L => "l",
+            &StatsQuery::M => "m",
+            &StatsQuery::O => "o",
+            &StatsQuery::U => "u",
+            &StatsQuery::Y => "y",
+            &StatsQuery::UNKNOWN(ref u) => {
+                if u.contains(" ") {
+                    error!("Forwarding stats query with multiple params as query?");
+                    ""
+                } else {
+                    &u
+                }
             }
-            &JoinChannels::PartAll => serializer.serialize_str("0"),
-        }
+        };
+        serializer.serialize_str(string)
     }
-}*/
+}
 
 #[derive(Debug)]
-pub struct Error {}
+pub struct Error {
+    desc: String,
+}
 
 impl std::error::Error for Error {
     fn description(&self) -> &str {
-        unimplemented!()
+        &self.desc
     }
 
     fn cause(&self) -> Option<&std::error::Error> {
-        unimplemented!()
+        None
     }
 }
 
 impl From<std::io::Error> for Error {
-    fn from(_: std::io::Error) -> Self {
-        unimplemented!()
+    fn from(e: std::io::Error) -> Self {
+        Self { desc: e.description().to_string() }
     }
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        unimplemented!()
+        write!(f, "Serialization error: {}.", self.desc)
     }
 }
 
 impl serde::ser::Error for Error {
     fn custom<T: std::fmt::Display>(msg: T) -> Self {
-        unimplemented!()
+        Self { desc: format!("{}", msg) }
     }
 }
 
@@ -158,18 +172,17 @@ impl<'a> ser::Serializer for &'a mut IRCSerializer {
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        // Don't actually write anything.
         Ok(())
     }
 
-    fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
         self.serialize_unit()
     }
 
     fn serialize_unit_variant(
         self,
-        name: &'static str,
-        variant_index: u32,
+        _name: &'static str,
+        _variant_index: u32,
         variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
         self.serialize_str(variant)
@@ -177,7 +190,7 @@ impl<'a> ser::Serializer for &'a mut IRCSerializer {
 
     fn serialize_newtype_struct<T: ?Sized>(
         self,
-        name: &'static str,
+        _name: &'static str,
         value: &T,
     ) -> Result<Self::Ok, Self::Error>
     where
@@ -191,7 +204,7 @@ impl<'a> ser::Serializer for &'a mut IRCSerializer {
         name: &'static str,
         variant_index: u32,
         variant: &'static str,
-        value: &T,
+        _value: &T,
     ) -> Result<Self::Ok, Self::Error>
     where
         T: Serialize,
@@ -205,50 +218,50 @@ impl<'a> ser::Serializer for &'a mut IRCSerializer {
         unimplemented!()
     }
 
-    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
         Ok(self)
     }
 
-    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
         Ok(self)
     }
 
     fn serialize_tuple_struct(
         self,
-        name: &'static str,
-        len: usize,
+        _name: &'static str,
+        _len: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
         Ok(self)
     }
 
     fn serialize_tuple_variant(
         self,
-        name: &'static str,
-        variant_index: u32,
-        variant: &'static str,
-        len: usize,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+        _len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
         Ok(self)
     }
 
-    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
         Ok(self)
     }
 
     fn serialize_struct(
         self,
-        name: &'static str,
-        len: usize,
+        _name: &'static str,
+        _len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
         Ok(self)
     }
 
     fn serialize_struct_variant(
         self,
-        name: &'static str,
-        variant_index: u32,
+        _name: &'static str,
+        _variant_index: u32,
         variant: &'static str,
-        len: usize,
+        _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
         self.output += &format!("{}", variant);
         Ok(self)
@@ -283,7 +296,7 @@ impl<'a> ser::SerializeTuple for &'a mut IRCSerializer {
     type Ok = ();
     type Error = Error;
 
-    fn serialize_element<T>(&mut self, value: &T) -> std::result::Result<Self::Ok, Self::Error>
+    fn serialize_element<T>(&mut self, _value: &T) -> std::result::Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
@@ -300,7 +313,7 @@ impl<'a> ser::SerializeTupleStruct for &'a mut IRCSerializer {
     type Ok = ();
     type Error = Error;
 
-    fn serialize_field<T>(&mut self, value: &T) -> std::result::Result<Self::Ok, Self::Error>
+    fn serialize_field<T>(&mut self, _value: &T) -> std::result::Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
@@ -325,7 +338,7 @@ impl<'a> ser::SerializeTupleVariant for &'a mut IRCSerializer {
     type Ok = ();
     type Error = Error;
 
-    fn serialize_field<T>(&mut self, value: &T) -> std::result::Result<Self::Ok, Self::Error>
+    fn serialize_field<T>(&mut self, _value: &T) -> std::result::Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
@@ -357,7 +370,7 @@ impl<'a> ser::SerializeMap for &'a mut IRCSerializer {
     // This can be done by using a different Serializer to serialize the key
     // (instead of `&mut **self`) and having that other serializer only
     // implement `serialize_str` and return an error on any other data type.
-    fn serialize_key<T>(&mut self, key: &T) -> std::result::Result<Self::Ok, Self::Error>
+    fn serialize_key<T>(&mut self, _key: &T) -> std::result::Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
@@ -367,7 +380,7 @@ impl<'a> ser::SerializeMap for &'a mut IRCSerializer {
     // It doesn't make a difference whether the colon is printed at the end of
     // `serialize_key` or at the beginning of `serialize_value`. In this case
     // the code is a bit simpler having it here.
-    fn serialize_value<T>(&mut self, value: &T) -> std::result::Result<Self::Ok, Self::Error>
+    fn serialize_value<T>(&mut self, _value: &T) -> std::result::Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
@@ -387,7 +400,7 @@ impl<'a> ser::SerializeStruct for &'a mut IRCSerializer {
 
     fn serialize_field<T>(
         &mut self,
-        key: &'static str,
+        _key: &'static str,
         value: &T,
     ) -> std::result::Result<Self::Ok, Self::Error>
     where
@@ -445,7 +458,7 @@ impl<'a> ser::SerializeStructVariant for &'a mut IRCSerializer {
 #[cfg(test)]
 mod test {
     use super::to_string;
-    use super::super::{Message, Command, Request, Response};
+    use super::super::{Message, Command, Request, Response, StatsQuery};
 
     macro_rules! verify_serialize{
         ($serialized:expr, $message:expr) => {
@@ -501,6 +514,39 @@ mod test {
             Message {
                 prefix: None,
                 command: Command::Req(Request::QUIT { message: None }),
+            }
+        );
+
+        verify_serialize!(
+            ":WiZ STATS",
+            Message {
+                prefix: Some("WiZ".to_string()),
+                command: Command::Req(Request::STATS {
+                    query: None,
+                    target: None,
+                }),
+            }
+        );
+
+        verify_serialize!(
+            ":WiZ STATS :k",
+            Message {
+                prefix: Some("WiZ".to_string()),
+                command: Command::Req(Request::STATS {
+                    query: Some(StatsQuery::K),
+                    target: None,
+                }),
+            }
+        );
+
+        verify_serialize!(
+            ":User STATS yolo :irc.mozilla.org",
+            Message {
+                prefix: Some("User".to_string()),
+                command: Command::Req(Request::STATS {
+                    query: Some(StatsQuery::UNKNOWN("yolo".to_string())),
+                    target: Some("irc.mozilla.org".to_string()),
+                }),
             }
         );
 
