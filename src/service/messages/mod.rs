@@ -89,13 +89,6 @@ pub enum StatsQuery {
     U,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
-pub enum JoinChannels {
-    Channels(Vec<String>),
-    KeyedChannels(Vec<(String, String)>),
-    PartAll,
-}
-
 // RFC 1459 4, 5. RFC 2812.
 #[allow(non_snake_case)]
 #[derive(Debug, PartialEq, Eq, Clone, Serialize)]
@@ -128,8 +121,10 @@ pub enum Request {
     SQUIT { server: String, comment: String },
 
     // 4.2 Channel Operations.
-    #[serde(serialize_with(serialize_with = "serializer::join_serializer")]
-    JOIN { channels: JoinChannels },
+    JOIN {
+        channels: Vec<String>,
+        keys: Vec<String>,
+    },
     PART {
         channels: Vec<String>,
         message: Option<String>,
@@ -145,8 +140,8 @@ pub enum Request {
     },
     NAMES { channels: Vec<String> },
     LIST {
-        channels: Option<Vec<String>>,
-        elist: Option<Vec<String>>,
+        channels: Vec<String>,
+        elist: Vec<String>,
     },
     INVITE { nickname: String, channel: String },
     KICK {

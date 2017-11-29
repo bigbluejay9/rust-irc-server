@@ -4,8 +4,6 @@ use serde::ser::{self, Serialize, Serializer, SerializeSeq};
 use std;
 use std::str;
 
-use super::JoinChannels;
-
 pub fn to_string<T>(value: &T) -> std::result::Result<String, Error>
 where
     T: Serialize,
@@ -25,13 +23,6 @@ where
         // For not rely on the fact that serializing unit produces nothing.
         &None => serializer.serialize_unit(),
     }
-}
-
-pub fn join_serializer<S: ser::Serializer>(
-    t: &super::Request,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    unimplemented!()
 }
 
 /*impl Serialize for JoinChannels {
@@ -454,7 +445,7 @@ impl<'a> ser::SerializeStructVariant for &'a mut IRCSerializer {
 #[cfg(test)]
 mod test {
     use super::to_string;
-    use super::super::{Message, Command, Request, Response, JoinChannels};
+    use super::super::{Message, Command, Request, Response};
 
     macro_rules! verify_serialize{
         ($serialized:expr, $message:expr) => {
@@ -468,7 +459,10 @@ mod test {
             "JOIN :0",
             Message {
                 prefix: None,
-                command: Command::Req(Request::JOIN { channels: JoinChannels::PartAll }),
+                command: Command::Req(Request::JOIN {
+                    channels: vec!["0".to_string()],
+                    keys: Vec::new(),
+                }),
             }
         );
 
@@ -477,9 +471,8 @@ mod test {
             Message {
                 prefix: None,
                 command: Command::Req(Request::JOIN {
-                    channels: JoinChannels::Channels(
-                        vec!["#channel1".to_string(), "channel2".to_string()],
-                    ),
+                    channels: vec!["#channel1".to_string(), "channel2".to_string()],
+                    keys: Vec::new(),
                 }),
             }
         );
@@ -489,10 +482,8 @@ mod test {
             Message {
                 prefix: None,
                 command: Command::Req(Request::JOIN {
-                    channels: JoinChannels::KeyedChannels(vec![
-                        ("#channel1".to_string(), "key1".to_string()),
-                        ("channel2".to_string(), "secret!".to_string()),
-                    ]),
+                    channels: vec!["#channel1".to_string(), "channel2".to_string()],
+                    keys: vec!["key1".to_string(), "secret!".to_string()],
                 }),
             }
         );

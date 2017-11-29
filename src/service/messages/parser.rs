@@ -1,6 +1,6 @@
 use std::{self, fmt, str};
 
-use super::{Message, Request, Response, Command, UserMode, JoinChannels, StatsQuery, RequestedMode};
+use super::{Message, Request, Response, Command, UserMode, StatsQuery, RequestedMode};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
@@ -223,7 +223,18 @@ impl str::FromStr for Request {
                 })
             }
 
-            "JOIN" => Ok(Request::JOIN { channels: r.parse::<JoinChannels>()? }),
+            "JOIN" => {
+                let p = try!(extract_params(r, 1, "JOIN"));
+                Ok(Request::JOIN {
+                    channels: rf!(p, 0, String)
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect(),
+                    keys: of!(p, 1, String).map_or(Vec::new(), |k| {
+                        k.split(",").map(|s| s.to_string()).collect()
+                    }),
+                })
+            }
 
             "PART" => {
                 let p = try!(extract_params(r, 1, "PART"));
@@ -269,10 +280,12 @@ impl str::FromStr for Request {
             "LIST" => {
                 let p = try!(extract_params(r, 0, "LIST"));
                 Ok(Request::LIST {
-                    channels: of!(p, 0, String).map(|s| {
+                    channels: of!(p, 0, String).map_or(Vec::new(), |s| {
                         s.split(",").map(|s| s.to_string()).collect()
                     }),
-                    elist: of!(p, 1, String).map(|s| s.split(",").map(|s| s.to_string()).collect()),
+                    elist: of!(p, 1, String).map_or(Vec::new(), |s| {
+                        s.split(",").map(|s| s.to_string()).collect()
+                    }),
                 })
             }
 
@@ -839,13 +852,6 @@ impl str::FromStr for UserMode {
 }
 
 impl str::FromStr for RequestedMode {
-    type Err = ParseError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        unimplemented!()
-    }
-}
-
-impl str::FromStr for JoinChannels {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         unimplemented!()
