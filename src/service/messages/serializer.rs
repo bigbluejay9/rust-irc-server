@@ -1,8 +1,10 @@
 use serde;
-use serde::ser::{self, Serialize};
+use serde::ser::{self, Serialize, Serializer, SerializeSeq};
 
 use std;
 use std::str;
+
+use super::JoinChannels;
 
 pub fn to_string<T>(value: &T) -> std::result::Result<String, Error>
 where
@@ -24,6 +26,29 @@ where
         &None => serializer.serialize_unit(),
     }
 }
+
+pub fn join_serializer<S: ser::Serializer>(
+    t: &super::Request,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    unimplemented!()
+}
+
+/*impl Serialize for JoinChannels {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            &JoinChannels::Channels(ref c) => serializer.serialize_str(&c.join(",")),
+            &JoinChannels::KeyedChannels(ref c) => {
+                let (chans, keys): (Vec<String>, Vec<String>) = c.iter().cloned().unzip();
+                let mut output = chans.join(",");
+                output.push_str(" :");
+                output.push_str(&keys.join(","));
+                serializer.serialize_str(&output)
+            }
+            &JoinChannels::PartAll => serializer.serialize_str("0"),
+        }
+    }
+}*/
 
 #[derive(Debug)]
 pub struct Error {}
@@ -429,7 +454,7 @@ impl<'a> ser::SerializeStructVariant for &'a mut IRCSerializer {
 #[cfg(test)]
 mod test {
     use super::to_string;
-    use super::super::{Message, Command, Request, Response};
+    use super::super::{Message, Command, Request, Response, JoinChannels};
 
     macro_rules! verify_serialize{
         ($serialized:expr, $message:expr) => {
@@ -439,6 +464,39 @@ mod test {
 
     #[test]
     fn test_serialize() {
+        verify_serialize!(
+            "JOIN :0",
+            Message {
+                prefix: None,
+                command: Command::Req(Request::JOIN { channels: JoinChannels::PartAll }),
+            }
+        );
+
+        verify_serialize!(
+            "JOIN :#channel1,channel2",
+            Message {
+                prefix: None,
+                command: Command::Req(Request::JOIN {
+                    channels: JoinChannels::Channels(
+                        vec!["#channel1".to_string(), "channel2".to_string()],
+                    ),
+                }),
+            }
+        );
+
+        verify_serialize!(
+            "JOIN #channel1,channel2 :key1,secret!",
+            Message {
+                prefix: None,
+                command: Command::Req(Request::JOIN {
+                    channels: JoinChannels::KeyedChannels(vec![
+                        ("#channel1".to_string(), "key1".to_string()),
+                        ("channel2".to_string(), "secret!".to_string()),
+                    ]),
+                }),
+            }
+        );
+
         verify_serialize!(
             "NICK :lazau",
             Message {
@@ -495,7 +553,7 @@ mod test {
                 prefix: Some("WiZ".to_string()),
                 command: Command::Req(Request::CONNECT {
                     target: "eff.org".to_string(),
-                    port: 6667,
+                    port: Some(6667),
                     remote: Some("csd.bu.edu".to_string()),
                 }),
             }

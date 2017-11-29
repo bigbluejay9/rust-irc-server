@@ -1,6 +1,6 @@
 use std::{self, fmt, str};
 
-use super::{Message, Request, Response, Command, UserMode, JoinChannels};
+use super::{Message, Request, Response, Command, UserMode, JoinChannels, StatsQuery, RequestedMode};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
@@ -18,16 +18,6 @@ impl<T: std::error::Error> std::convert::From<T> for ParseError {
         ParseError::Other
     }
 }
-
-/*impl std::error::Error for ParseError {
-    fn description(&self) -> &str {
-        self.desc
-    }
-
-    fn cause(&self) -> Option<&std::error::Error> {
-        None
-    }
-}*/
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -153,7 +143,7 @@ macro_rules! rf {
 // Macro to generate a value for as optional field.
 // Should only be used if the the optional field is at the end of the param list.
 macro_rules! of {
-    ($p:expr, $idx:expr, $type:ty) => { 
+    ($p:expr, $idx:expr, $type:ty) => {
         if $p.len() > $idx {
             Some($p[$idx].parse::<$type>()?)
         } else {
@@ -200,6 +190,18 @@ impl str::FromStr for Request {
                 })
             }
 
+            "SERVICE" => {
+                let p = try!(extract_params(r, 6, "SERVICE"));
+                Ok(Request::SERVICE {
+                    nickname: rf!(p, 0, String),
+                    reserved1: rf!(p, 1, String),
+                    distribution: rf!(p, 2, String),
+                    ty: rf!(p, 3, String),
+                    reserved2: rf!(p, 4, String),
+                    info: rf!(p, 5, String),
+                })
+            }
+
             "OPER" => {
                 let p = try!(extract_params(r, 2, "OPER"));
                 Ok(Request::OPER {
@@ -221,20 +223,7 @@ impl str::FromStr for Request {
                 })
             }
 
-            "JOIN" => {
-                let p = try!(extract_params(r, 1, "JOIN"));
-                if p.len() == 1 && p[0] == "0" {
-                    Ok(Request::JOIN {
-                        part_all: true,
-                        channels: None,
-                    })
-                } else {
-                    Ok(Request::JOIN {
-                        part_all: false,
-                        channels: Some(r.parse::<JoinChannels>()?),
-                    })
-                }
-            }
+            "JOIN" => Ok(Request::JOIN { channels: r.parse::<JoinChannels>()? }),
 
             "PART" => {
                 let p = try!(extract_params(r, 1, "PART"));
@@ -247,7 +236,18 @@ impl str::FromStr for Request {
                 })
             }
 
-            //"MODE" => Ok(Request::MODE),
+            "MODE" => {
+                let p = try!(extract_params(r, 1, "MODE"));
+                Ok(Request::MODE {
+                    target: rf!(p, 0, String),
+                    mode: if p.len() > 1 {
+                        Some(p[1..].join(" ").parse::<RequestedMode>()?)
+                    } else {
+                        None
+                    },
+                })
+            }
+
             "TOPIC" => {
                 let p = try!(extract_params(r, 1, "TOPIC"));
                 Ok(Request::TOPIC {
@@ -266,20 +266,96 @@ impl str::FromStr for Request {
                 })
             }
 
-            //"LIST" => Ok(Request::LIST),
-            //"INVITE" => Ok(Request::INVITE),
-            //"KICK" => Ok(Request::KICK),
+            "LIST" => {
+                let p = try!(extract_params(r, 0, "LIST"));
+                Ok(Request::LIST {
+                    channels: of!(p, 0, String).map(|s| {
+                        s.split(",").map(|s| s.to_string()).collect()
+                    }),
+                    elist: of!(p, 1, String).map(|s| s.split(",").map(|s| s.to_string()).collect()),
+                })
+            }
+
+            "INVITE" => {
+                let p = try!(extract_params(r, 2, "INVITE"));
+                Ok(Request::INVITE {
+                    nickname: rf!(p, 0, String),
+                    channel: rf!(p, 1, String),
+                })
+            }
+
+            "KICK" => {
+                let p = try!(extract_params(r, 2, "KICK"));
+                Ok(Request::KICK {
+                    channels: rf!(p, 0, String)
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect(),
+                    users: rf!(p, 1, String)
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect(),
+                    comment: of!(p, 2, String),
+                })
+            }
+
+            "MOTD" => {
+                let p = try!(extract_params(r, 0, "MOTD"));
+                Ok(Request::MOTD { target: of!(p, 0, String) })
+            }
+
+            "LUSERS" => {
+                let p = try!(extract_params(r, 0, "MOTD"));
+                Ok(Request::LUSERS {
+                    mask: of!(p, 0, String),
+                    target: of!(p, 1, String),
+                })
+            }
+
             "VERSION" => {
                 let p = try!(extract_params(r, 0, "VERSION"));
                 Ok(Request::VERSION { target: of!(p, 0, String) })
             }
-            //"STATS" => Ok(Request::STATS),
-            //"LINKS" => Ok(Request::LINKS),
+
+            "STATS" => {
+                let p = try!(extract_params(r, 0, "STATS"));
+                Ok(Request::STATS {
+                    query: of!(p, 0, StatsQuery),
+                    target: of!(p, 1, String),
+                })
+            }
+
+            "LINKS" => {
+                let p = try!(extract_params(r, 0, "LINKS"));
+
+                let (mut remote, mut mask) = (None, None);
+                if p.len() > 1 {
+                    remote = of!(p, 0, String);
+                    mask = of!(p, 1, String);
+                } else if p.len() == 1 {
+                    mask = of!(p, 0, String);
+                }
+
+                Ok(Request::LINKS {
+                    remote_server: remote,
+                    server_mask: mask,
+                })
+            }
+
             "TIME" => {
                 let p = try!(extract_params(r, 0, "TIME"));
                 Ok(Request::TIME { target: of!(p, 0, String) })
             }
-            //"CONNECT" => Ok(Request::CONNECT),
+
+            "CONNECT" => {
+                let p = try!(extract_params(r, 1, "CONNECT"));
+                Ok(Request::CONNECT {
+                    target: rf!(p, 0, String),
+                    port: of!(p, 1, u32),
+                    remote: of!(p, 2, String),
+                })
+            }
+
             "TRACE" => {
                 let p = try!(extract_params(r, 0, "TRACE"));
                 Ok(Request::TRACE { target: of!(p, 0, String) })
@@ -294,23 +370,168 @@ impl str::FromStr for Request {
                 let p = try!(extract_params(r, 0, "INFO"));
                 Ok(Request::INFO { target: of!(p, 0, String) })
             }
-            //"PRIVMSG" => Ok(Request::PRIVMSG),
-            //"NOTICE" => Ok(Request::NOTICE),
-            //"WHO" => Ok(Request::WHO),
-            //"WHOIS" => Ok(Request::WHOIS),
-            //"WHOWAS" => Ok(Request::WHOWAS),
-            //"KILL" => Ok(Request::KILL),
-            //"PING" => Ok(Request::PING),
-            //"PONG" => Ok(Request::PONG),
-            //"ERROR" => Ok(Request::ERROR),
-            //"AWAY" => Ok(Request::AWAY),
-            //"REHASH" => Ok(Request::REHASH),
-            //"RESTART" => Ok(Request::RESTART),
-            //"SUMMON" => Ok(Request::SUMMON),
-            //"USERS" => Ok(Request::USERS),
-            //"WALLOPS" => Ok(Request::WALLOPS),
-            //"USERHOST" => Ok(Request::USERHOST),
-            //"ISON" => Ok(Request::ISON),
+
+            "PRIVMSG" => {
+                let p = try!(extract_params(r, 2, "PRIVMSG"));
+                Ok(Request::PRIVMSG {
+                    targets: rf!(p, 0, String)
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect(),
+                    message: rf!(p, 1, String),
+                })
+            }
+
+            "NOTICE" => {
+                let p = try!(extract_params(r, 2, "NOTICE"));
+                Ok(Request::NOTICE {
+                    targets: rf!(p, 0, String)
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect(),
+                    message: rf!(p, 1, String),
+                })
+            }
+
+            "SERVLIST" => {
+                let p = try!(extract_params(r, 0, "SERVLIST"));
+                Ok(Request::SERVLIST {
+                    mask: of!(p, 0, String),
+                    server_type: of!(p, 1, String),
+                })
+            }
+
+            "SQUERY" => {
+                let p = try!(extract_params(r, 2, "SQUERY"));
+                Ok(Request::SQUERY {
+                    servicename: rf!(p, 0, String),
+                    text: rf!(p, 1, String),
+                })
+            }
+
+            "WHO" => {
+                let p = try!(extract_params(r, 0, "WHO"));
+                let mut mask = None;
+                let mut oper = false;
+                if p.len() > 0 {
+                    mask = Some(p[0].to_string());
+                    if p.len() > 1 {
+                        oper = p[1] == "o";
+                    }
+                }
+                Ok(Request::WHO {
+                    mask: mask,
+                    operators: oper,
+                })
+            }
+
+            "WHOIS" => {
+                let p = try!(extract_params(r, 1, "WHOIS"));
+
+                let parsed;
+                if p.len() == 1 {
+                    parsed = Request::WHOIS {
+                        target: None,
+                        masks: rf!(p, 0, String)
+                            .split(",")
+                            .map(|s| s.to_string())
+                            .collect(),
+                    };
+                } else {
+                    // p.len() > 1
+                    parsed = Request::WHOIS {
+                        target: of!(p, 0, String),
+                        masks: rf!(p, 1, String)
+                            .split(",")
+                            .map(|s| s.to_string())
+                            .collect(),
+                    };
+                }
+                Ok(parsed)
+            }
+
+            "WHOWAS" => {
+                let p = try!(extract_params(r, 1, "WHOWAS"));
+                Ok(Request::WHOWAS {
+                    nicknames: rf!(p, 0, String)
+                        .split(",")
+                        .map(|s| s.to_string())
+                        .collect(),
+                    max: of!(p, 1, i64),
+                    target: of!(p, 2, String),
+                })
+            }
+
+            "KILL" => {
+                let p = try!(extract_params(r, 2, "KILL"));
+                Ok(Request::KILL {
+                    nickname: rf!(p, 0, String),
+                    comment: rf!(p, 1, String),
+                })
+            }
+
+            "PING" => {
+                let p = try!(extract_params(r, 1, "PING"));
+                Ok(Request::PING {
+                    originator: rf!(p, 0, String),
+                    target: of!(p, 1, String),
+                })
+            }
+
+            "PONG" => {
+                let p = try!(extract_params(r, 1, "PONG"));
+                Ok(Request::PONG {
+                    originator: rf!(p, 0, String),
+                    target: of!(p, 1, String),
+                })
+            }
+
+            "ERROR" => {
+                let p = try!(extract_params(r, 1, "ERROR"));
+                Ok(Request::ERROR { message: rf!(p, 0, String) })
+            }
+
+            "AWAY" => {
+                let p = try!(extract_params(r, 0, "AWAY"));
+                Ok(Request::AWAY { message: of!(p, 1, String) })
+            }
+
+            "REHASH" => Ok(Request::REHASH),
+
+            "RESTART" => Ok(Request::RESTART),
+
+            "SUMMON" => {
+                let p = try!(extract_params(r, 1, "SUMMON"));
+                Ok(Request::SUMMON {
+                    user: rf!(p, 0, String),
+                    target: of!(p, 1, String),
+                    channel: of!(p, 2, String),
+                })
+            }
+
+            "USERS" => {
+                let p = try!(extract_params(r, 0, "USERS"));
+                Ok(Request::USERS { target: of!(p, 0, String) })
+            }
+
+            "WALLOPS" => {
+                let p = try!(extract_params(r, 1, "WALLOPS"));
+                Ok(Request::WALLOPS { message: rf!(p, 0, String) })
+            }
+
+            "USERHOST" => {
+                let p = try!(extract_params(r, 1, "USERHOST"));
+                Ok(Request::USERHOST {
+                    nicknames: p.into_iter().map(|s| s.to_string()).collect(),
+                })
+            }
+
+            "ISON" => {
+                let p = try!(extract_params(r, 1, "ISON"));
+                Ok(Request::ISON {
+                    nicknames: p.into_iter().map(|s| s.to_string()).collect(),
+                })
+            }
             _ => Err(ParseError::NotARequest),
         }
     }
@@ -617,7 +838,21 @@ impl str::FromStr for UserMode {
     }
 }
 
+impl str::FromStr for RequestedMode {
+    type Err = ParseError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        unimplemented!()
+    }
+}
+
 impl str::FromStr for JoinChannels {
+    type Err = ParseError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        unimplemented!()
+    }
+}
+
+impl str::FromStr for StatsQuery {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         unimplemented!()

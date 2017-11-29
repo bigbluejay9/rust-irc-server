@@ -4,12 +4,6 @@ mod parser;
 pub use self::serializer::{to_string, Error as SerializerError};
 pub use self::parser::ParseError;
 
-use std;
-use std::fmt::{self, Write};
-use std::str;
-
-use serde;
-
 #[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub struct Message {
     #[serde(serialize_with = "serializer::message_prefix_serializer")]
@@ -99,6 +93,7 @@ pub enum StatsQuery {
 pub enum JoinChannels {
     Channels(Vec<String>),
     KeyedChannels(Vec<(String, String)>),
+    PartAll,
 }
 
 // RFC 1459 4, 5. RFC 2812.
@@ -121,20 +116,29 @@ pub enum Request {
         info: String,
     },
     OPER { name: String, password: String },
+    SERVICE {
+        nickname: String,
+        reserved1: String,
+        distribution: String,
+        ty: String,
+        reserved2: String,
+        info: String,
+    },
     QUIT { message: Option<String> },
     SQUIT { server: String, comment: String },
 
     // 4.2 Channel Operations.
-    JOIN {
-        part_all: bool,
-        channels: Option<JoinChannels>,
-    },
+    #[serde(serialize_with(serialize_with = "serializer::join_serializer")]
+    JOIN { channels: JoinChannels },
     PART {
         channels: Vec<String>,
         message: Option<String>,
     },
     // TODO(lazau): Verify.
-    MODE { mode: RequestedMode },
+    MODE {
+        target: String,
+        mode: Option<RequestedMode>,
+    },
     TOPIC {
         channel: String,
         topic: Option<String>,
@@ -146,12 +150,19 @@ pub enum Request {
     },
     INVITE { nickname: String, channel: String },
     KICK {
-        channel: Vec<String>,
-        user: Vec<String>,
+        channels: Vec<String>,
+        users: Vec<String>,
         comment: Option<String>,
     },
 
     // 4.3 Server queries and commands.
+    // RFC 2812 additions.
+    MOTD { target: Option<String> },
+    LUSERS {
+        mask: Option<String>,
+        target: Option<String>,
+    },
+    // END RFC 2812 additions.
     VERSION { target: Option<String> },
     STATS {
         query: Option<StatsQuery>,
@@ -165,7 +176,7 @@ pub enum Request {
     TIME { target: Option<String> },
     CONNECT {
         target: String,
-        port: u32,
+        port: Option<u32>,
         remote: Option<String>,
     },
     TRACE { target: Option<String> },
@@ -173,11 +184,27 @@ pub enum Request {
     INFO { target: Option<String> },
 
     // 4.4 Sending messages.
-    PRIVMSG { targets: Vec<String>, text: String },
-    NOTICE { targets: Vec<String>, text: String },
+    PRIVMSG {
+        targets: Vec<String>,
+        message: String,
+    },
+    NOTICE {
+        targets: Vec<String>,
+        message: String,
+    },
 
     // 4.5 User based queries.
-    WHO { mask: String, operators: bool },
+    // RFC 2812 additions (Service Query and Commands).
+    SERVLIST {
+        mask: Option<String>,
+        server_type: Option<String>,
+    },
+    SQUERY { servicename: String, text: String },
+    // END RFC 2812 additions.
+    WHO {
+        mask: Option<String>,
+        operators: bool,
+    },
     WHOIS {
         target: Option<String>,
         masks: Vec<String>,
@@ -191,12 +218,12 @@ pub enum Request {
     // 4.6 Misc.
     KILL { nickname: String, comment: String },
     PING {
-        server1: String,
-        server2: Option<String>,
+        originator: String,
+        target: Option<String>,
     },
     PONG {
-        daemon1: String,
-        daemon2: Option<String>,
+        originator: String,
+        target: Option<String>,
     },
     ERROR { message: String },
 
@@ -210,7 +237,7 @@ pub enum Request {
         channel: Option<String>,
     },
     USERS { target: Option<String> },
-    WALLOPS { text: String },
+    WALLOPS { message: String },
     USERHOST { nicknames: Vec<String> },
     ISON { nicknames: Vec<String> },
 }
