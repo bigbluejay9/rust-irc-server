@@ -861,7 +861,6 @@ impl str::FromStr for StatsQuery {
 
 #[cfg(test)]
 mod test {
-    use std::{str, slice};
     use rand;
     use super::ParseError;
     use super::super::{Message, Command, Request, Response};
@@ -949,7 +948,6 @@ mod test {
 
     #[test]
     fn fuzz() {
-        let mut rng = rand::thread_rng();
         let (max_input_len, cases) = (1024, 1000);
         for _ in 0..cases {
             let len = rand::random::<u32>() % max_input_len;

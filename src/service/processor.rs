@@ -4,16 +4,14 @@ use super::data;
 use super::messages;
 
 pub fn process_message(
-    server: Arc<Mutex<data::Server>>,
-    client: Arc<Mutex<data::Connection>>,
+    client: Arc<Mutex<data::Client>>,
     server_prefix: Option<String>,
     req: messages::Message,
 ) -> Vec<messages::Message> {
     trace!(
-        "Processing request [{:?}].\nClient state: {:?}.\nServer state: {:?}.\nServer prefix: {:?}.",
+        "Processing request [{:?}].\nClient state: {:?}.\nServer prefix: {:?}.",
         req,
         client,
-        server,
         server_prefix
     );
 
@@ -21,11 +19,16 @@ pub fn process_message(
         messages::Command::Req(r) => {
             match r {
                 messages::Request::NICK { nickname: nick } => {
-                    let mut client = client.lock().unwrap();
                     // TODO(lazau): Validate nick based on
                     // https://tools.ietf.org/html/rfc2812#section-2.3.1.
-                    let mut server = server.lock().unwrap();
-                    if !server.nicknames.insert(nick.clone()) {
+                    let mut client = client.lock().unwrap();
+                    if client
+                        .server
+                        .lock()
+                        .unwrap()
+                        .replace_nick(&client, nick.clone())
+                        .err() == Some(data::ServerError::NickInUse)
+                    {
                         return vec![
                             messages::Message {
                                 prefix: server_prefix,
@@ -34,10 +37,11 @@ pub fn process_message(
                                 ),
                             },
                         ];
-                    }
-                    client.nick = Some(nick.clone());
 
-                    maybe_welcome_sequence(&server, &client, server_prefix)
+                    }
+                    client.nick = Some(nick);
+
+                    maybe_welcome_sequence(&client, server_prefix)
                 }
 
                 messages::Request::USER {
@@ -52,7 +56,7 @@ pub fn process_message(
                         realname: realname,
                     });
 
-                    maybe_welcome_sequence(&*server.lock().unwrap(), &client, server_prefix)
+                    maybe_welcome_sequence(&client, server_prefix)
                 }
 
                 u @ _ => {
@@ -70,8 +74,7 @@ pub fn process_message(
 
 // Returns WELCOME sequence if client has successfully registered.
 fn maybe_welcome_sequence(
-    server: &data::Server,
-    client: &data::Connection,
+    client: &data::Client,
     server_prefix: Option<String>,
 ) -> Vec<messages::Message> {
     if client.user.is_none() || client.nick.is_none() {

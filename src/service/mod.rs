@@ -2,11 +2,11 @@ mod codec;
 mod messages;
 mod data;
 mod processor;
+mod stats;
 
-use hostname;
 use chrono;
+use hostname;
 
-use std::collections::{HashSet, HashMap};
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
@@ -16,10 +16,9 @@ use futures::sync::mpsc;
 use futures::stream::Stream;
 use futures_cpupool::CpuPool;
 
-use tokio_core::reactor::{Core, Handle};
 use tokio_core::net::TcpListener;
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_io::io::write_all;
+use tokio_core::reactor::Core;
+use tokio_io::AsyncRead;
 
 // A union of socket events and server-wide events.
 #[derive(Debug)]
@@ -34,43 +33,38 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
     let thread_pool = CpuPool::new_num_cpus();
     let lis = TcpListener::bind(&local_addr, &handle).unwrap();
 
-    let server = Arc::new(Mutex::new(data::Server {
-        created: chrono::offset::Utc::now(),
-        version: "0.1".to_string(),
-        hostname: hostname::get_hostname().expect("unable to get hostname"),
-        nicknames: HashSet::new(),
-        connections: HashMap::new(),
-    }));
+    let server = Arc::new(Mutex::new(data::Server::new(
+        chrono::offset::Utc::now(),
+        "0.1".to_string(),
+    )));
 
-    start_stats_server(http, &handle);
+    stats::start_stats_server(http, &handle, Arc::clone(&server));
 
     let srv = lis.incoming().for_each(|(stream, addr)| {
         let server = Arc::clone(&server);
         // Create client connection.
         handle.spawn(thread_pool.spawn_fn(move || {
-            // TODO(lazau): How large should this buffer be?
-            // Note: should penalize slow clients.
-            let client = Arc::new(Mutex::new(data::Connection {
-                local_addr: local_addr,
-                remote_addr: addr,
-                nick: None,
-                user: None,
-            }));
+            let socket = data::SocketPair {
+                local: local_addr,
+                remote: addr,
+            };
+            let client = Arc::new(Mutex::new(
+                data::Client::new(socket.clone(), Arc::clone(&server)),
+            ));
 
             // TODO(lazau): How large should this buffer be?
             // Note: should penalize slow clients.
             let (tx, rx) = mpsc::channel(5);
-            server.lock().unwrap().connections.insert(
-                (local_addr, addr),
+            server.lock().unwrap().insert_client(
+                &socket,
+                Arc::clone(&client),
                 tx,
             );
 
             // Refcount for handle future.
             let client_handle = Arc::clone(&client);
-            let server_handle = Arc::clone(&server);
             // Refcount for cleanup future.
             let client_cleanup = Arc::clone(&client);
-            let server_cleanup = Arc::clone(&server);
 
             let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
             stream
@@ -102,7 +96,6 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                                 }
                             };
                             processor::process_message(
-                                Arc::clone(&server_handle),
                                 Arc::clone(&client_handle),
                                 server_prefix,
                                 message,
@@ -132,22 +125,9 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                 .then(move |e: Result<(_, _), io::Error>| {
                     // ** Cleanup future.
                     let client = client_cleanup.lock().unwrap();
-                    let mut server = server_cleanup.lock().unwrap();
-                    server.connections.remove(
-                        &(client.local_addr, client.remote_addr),
-                    );
-
+                    client.server.lock().unwrap().remove_client(&client);
                     if let Err(e) = e {
                         warn!("Connection error: {:?}.", e);
-                    }
-
-                    if let Some(ref nick) = client.nick {
-                        if !server.nicknames.remove(nick) {
-                            error!(
-                                "Trying to self remove nick {:?}, but it didn't exist.",
-                                nick
-                            );
-                        }
                     }
                     Ok(())
                 })
@@ -160,18 +140,4 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
         Err(e) => error!("Server failure: {:?}.", e),
         _ => {}
     };
-}
-
-fn start_stats_server(http: Option<SocketAddr>, handle: &Handle) {
-
-    if let Some(addr) = http {
-        debug!("Staring debug HTTP server at {:?}.", addr);
-        let lis = TcpListener::bind(&addr, &handle).unwrap();
-        let srv = lis.incoming().for_each(|(mut stream, _addr)| {
-            write_all(stream, "HTTP/1.0 200 OK\r\n\r\nOKOKOK".as_bytes())
-        });
-        //.map_err(|e| ());
-
-        handle.spawn(srv);
-    }
 }
