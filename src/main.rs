@@ -14,7 +14,7 @@ fn print_usage(prog: &str, opts: getopts::Options) {
 }
 
 fn build_socketaddr(port: u32) -> SocketAddr {
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("0.0.0.0:{}", port);
     addr.parse::<SocketAddr>().unwrap()
 }
 

@@ -28,13 +28,11 @@ pub fn start_stats_server(
     }
 
     let template_engine = Arc::new(Mutex::new(handlebars::Handlebars::new()));
-    assert!(
-        template_engine
-            .lock()
-            .unwrap()
-            .register_template_string(DEBUG_TEMPLATE_NAME, DEBUG_HTML_TEMPLATE)
-            .is_ok()
-    );
+    template_engine
+        .lock()
+        .unwrap()
+        .register_template_string(DEBUG_TEMPLATE_NAME, DEBUG_HTML_TEMPLATE)
+        .unwrap();
     let addr = http.unwrap();
 
     debug!("Starting debug HTTP server at {:?}.", addr);
@@ -56,7 +54,7 @@ pub fn start_stats_server(
                         trace!("Received HTTP request: {:?}.", line);
                         let mut output = DEBUG_HTTP_RESP.to_string();
                         output.push_str(&render(template_engine, server));
-                        debug!("Got output data: {:?}.", output);
+                        trace!("Got output data: {:?}.", output);
                         write_all(writer, output.into_bytes())
                     })
                     .into_future()
@@ -79,7 +77,6 @@ static DEBUG_HTML_TEMPLATE: &'static str = "
   <title>IRC Server State</title>
 </head>
 <body>
-<h1>IRC Server State</h1>
 <h2>Server</h2>
 <pre>
 {{server}}
@@ -93,7 +90,6 @@ static DEBUG_HTML_TEMPLATE: &'static str = "
     <td><a href=\"#{{this}}\">{{@key}}</a></td>
   </tr>
   {{/each}}
-  </tr>
 </table>
 <table>
   <tr>
@@ -101,16 +97,14 @@ static DEBUG_HTML_TEMPLATE: &'static str = "
     <th>Connection Data</th>
   </tr>
 {{#each connections}}
-  <div id=\"{{this.0}}\">
-  <tr>
+  <tr{{#if this.0.0}} id=\"{{this.0.1}}\"{{/if}}>
     <td>{{@key}}</td>
     <td>
     <pre>
-        {{this.1}}
+{{this.1}}
     </pre>
     </td>
   </tr>
-  </div>
 {{/each}}
 </table>
 
@@ -144,8 +138,8 @@ struct DebugOutputData {
     // Nick -> HTML Element ID.
     nick_to_connections: HashMap<String, String>,
 
-    // SocketPair -> (HTML Element ID, Client). There may be some clients without a Nick.
-    connections: HashMap<String, (String, String)>,
+    // SocketPair -> ((ID Valid, HTML Element ID), Client). There may be some clients without a Nick.
+    connections: HashMap<String, ((bool, String), String)>,
 }
 
 
@@ -179,8 +173,8 @@ fn serialize(server: Arc<Mutex<data::Server>>) -> Result<DebugOutputData, String
             let heading_number = addr_to_heading.get(&client.socket.to_string());
             connections_serialized.insert(client.socket.to_string(), (
                 match heading_number {
-                    Some(s) => s.to_string(),
-                    None => "XXX".to_string(),
+                    Some(s) => (true, s.to_string()),
+                    None => (false, "".to_string()),
                 },
                 serde_yaml::to_string(
                     client.deref(),
@@ -195,29 +189,3 @@ fn serialize(server: Arc<Mutex<data::Server>>) -> Result<DebugOutputData, String
         connections: connections_serialized,
     })
 }
-/*
-impl Serialize for DebugOutputData {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut s = serializer.serialize_struct("DebugOutputData", 2)?;
-        s.serialize_field(
-            "server",
-            &serde_yaml::to_string(self.server.lock().unwrap().deref())
-                .unwrap(),
-        )?;
-        s.serialize_field("connections", &self.connections)?;
-        s.end()
-    }
-}
-
-impl Serialize for DebugConnectionsData {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut s = serializer.serialize_map(Some(self.connections.len()))?;
-
-        for (k, v) in self.connections.iter() {
-            s.serialize_key(k)?;
-            s.serialize_value(v.lock().unwrap().deref())?;
-        }
-
-        s.end()
-    }
-}*/

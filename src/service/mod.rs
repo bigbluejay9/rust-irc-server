@@ -117,7 +117,7 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                     // TODO(lazau): Perform 512 max line size here.
                     for m in messages.unwrap() {
                         // TODO(lazau): Convert serialization error to future::err.
-                        result.push(messages::to_string(&m).unwrap());
+                        result.push(format!("{}", m));
                     }
                     future::ok(result)
                 })

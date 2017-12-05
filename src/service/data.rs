@@ -37,7 +37,10 @@ pub struct Server {
     pub created: chrono::DateTime<chrono::Utc>,
     pub version: String,
     pub hostname: String,
+    #[serde(skip)]
     nicks: HashSet<String>,
+
+    channels: HashMap<String, String>,
 
     // The heart of the server (note that nothing is serialized...).
     #[serde(skip)]
@@ -93,6 +96,7 @@ impl Server {
             version: version,
             hostname: hostname::get_hostname().expect("unable to get hostname"),
             nicks: HashSet::new(),
+            channels: HashMap::new(),
             nick_to_client: HashMap::new(),
             clients: HashMap::new(),
             connections: HashMap::new(),
@@ -147,6 +151,17 @@ impl Server {
         assert!(self.clients.remove(&client.socket).is_some());
         assert!(self.connections.remove(&client.socket).is_some());
     }
+
+    pub fn join_channel(
+        &mut self,
+        client: &Client,
+        channel: &String,
+        key: Option<&String>,
+    ) -> (String, Vec<String>) {
+        if client.nick.is_none() {}
+        //if self.channels.contains(client.nick
+        unimplemented!()
+    }
 }
 
 impl Client {
@@ -157,5 +172,9 @@ impl Client {
             user: None,
             server: server,
         }
+    }
+
+    pub fn registered(&self) -> bool {
+        self.nick.is_some() && self.user.is_some()
     }
 }
