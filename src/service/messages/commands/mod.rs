@@ -5,57 +5,6 @@ use std::{str, fmt};
 use std::fmt::{Formatter, Error as FmtError};
 use super::{next_token, ParseError};
 
-fn extract_params<'a>(
-    rem: &'a str,
-    required: usize,
-    err: &'static str,
-) -> Result<Vec<&'a str>, ParseError> {
-    let mut rem = rem;
-    let mut params: Vec<&str> = Vec::new();
-    while rem.len() > 0 {
-        if rem.starts_with(':') {
-            if rem.len() == 1 {
-                warn!("Empty trailing command parameter. Ignoring.")
-            } else {
-                params.push(&rem[1..]);
-            }
-            break;
-        }
-
-        let (next_param, r) = next_token(rem);
-        rem = r;
-
-        if next_param.len() == 0 {
-            warn!("Empty whitespace in parameters list: ignoring.");
-        } else {
-            params.push(next_param);
-        }
-    }
-
-    if params.len() < required {
-        return Err(ParseError::NeedMoreParams { command: err.to_string() });
-    }
-
-    Ok(params)
-}
-
-// Macro to generate a value for a required field.
-macro_rules! rf {
-    ($p:expr, $idx:expr, $type:ty) => { $p[$idx].parse::<$type>()? };
-}
-
-// Macro to generate a value for as optional field.
-// Should only be used if the the optional field is at the end of the param list.
-macro_rules! of {
-    ($p:expr, $idx:expr, $type:ty) => {
-        if $p.len() > $idx {
-            Some($p[$idx].parse::<$type>()?)
-        } else {
-            None
-        }
-    };
-}
-
 // RFC 1459 4, 5. RFC 2812.
 #[allow(non_snake_case, non_camel_case_types)]
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -149,7 +98,7 @@ pub enum Command {
     ERR_SUMMONDISABLED(responses::SUMMONDISABLED),
     ERR_USERSDISABLED(responses::USERSDISABLED),
     ERR_NOTREGISTERED(responses::NOTREGISTERED),
-    ERR_NEEDMOREPARAMS(responses::NEEDMOREPARAMS),
+    ERR_NEEDMOREPARAMS(responses::NeedMoreParams),
     ERR_ALREADYREGISTRED(responses::ALREADYREGISTRED),
     ERR_NOPERMFORHOST(responses::NOPERMFORHOST),
     ERR_PASSWDMISMATCH(responses::PASSWDMISMATCH),
@@ -259,10 +208,10 @@ pub enum Command {
     ERR_BADCHANMASK(responses::BADCHANMASK),
     ERR_NOSERVICEHOST(responses::NOSERVICEHOST),
     // RFC 2812 5.1 Command responses.
-    RPL_WELCOME(responses::WELCOME),
-    RPL_YOURHOST(responses::YOURHOST),
-    RPL_CREATED(responses::CREATED),
-    RPL_MYINFO(responses::MYINFO),
+    RPL_WELCOME(responses::Welcome),
+    RPL_YOURHOST(responses::YourHost),
+    RPL_CREATED(responses::Created),
+    RPL_MYINFO(responses::MyInfo),
     RPL_ISUPPORT(responses::ISUPPORT),
     RPL_BOUNCE(responses::BOUNCE),
 }
@@ -457,6 +406,57 @@ impl fmt::Display for Command {
             &Command::RPL_BOUNCE(ref c) => write!(f, "{}", c),
         }
     }
+}
+
+fn extract_params<'a>(
+    rem: &'a str,
+    required: usize,
+    err: &'static str,
+) -> Result<Vec<&'a str>, ParseError> {
+    let mut rem = rem;
+    let mut params: Vec<&str> = Vec::new();
+    while rem.len() > 0 {
+        if rem.starts_with(':') {
+            if rem.len() == 1 {
+                warn!("Empty trailing command parameter. Ignoring.")
+            } else {
+                params.push(&rem[1..]);
+            }
+            break;
+        }
+
+        let (next_param, r) = next_token(rem);
+        rem = r;
+
+        if next_param.len() == 0 {
+            warn!("Empty whitespace in parameters list: ignoring.");
+        } else {
+            params.push(next_param);
+        }
+    }
+
+    if params.len() < required {
+        return Err(ParseError::NeedMoreParams { command: err.to_string() });
+    }
+
+    Ok(params)
+}
+
+// Macro to generate a value for a required field.
+macro_rules! rf {
+    ($p:expr, $idx:expr, $type:ty) => { $p[$idx].parse::<$type>()? };
+}
+
+// Macro to generate a value for as optional field.
+// Should only be used if the the optional field is at the end of the param list.
+macro_rules! of {
+    ($p:expr, $idx:expr, $type:ty) => {
+        if $p.len() > $idx {
+            Some($p[$idx].parse::<$type>()?)
+        } else {
+            None
+        }
+    };
 }
 
 impl str::FromStr for Command {
@@ -953,7 +953,7 @@ impl str::FromStr for Command {
                 responses::NOTREGISTERED::default(),
             )),
             "461" => Ok(Command::ERR_NEEDMOREPARAMS(
-                responses::NEEDMOREPARAMS::default(),
+                responses::NeedMoreParams::default(),
             )),
             "462" => Ok(Command::ERR_ALREADYREGISTRED(
                 responses::ALREADYREGISTRED::default(),
@@ -1119,108 +1119,13 @@ impl str::FromStr for Command {
             "492" => Ok(Command::ERR_NOSERVICEHOST(
                 responses::NOSERVICEHOST::default(),
             )),
-            "001" => Ok(Command::RPL_WELCOME(responses::WELCOME::default())),
-            "002" => Ok(Command::RPL_YOURHOST(responses::YOURHOST::default())),
-            "003" => Ok(Command::RPL_CREATED(responses::CREATED::default())),
-            "004" => Ok(Command::RPL_MYINFO(responses::MYINFO::default())),
+            "001" => Ok(Command::RPL_WELCOME(responses::Welcome::default())),
+            "002" => Ok(Command::RPL_YOURHOST(responses::YourHost::default())),
+            "003" => Ok(Command::RPL_CREATED(responses::Created::default())),
+            "004" => Ok(Command::RPL_MYINFO(responses::MyInfo::default())),
             "005" => Ok(Command::RPL_ISUPPORT(responses::ISUPPORT::default())),
             "010" => Ok(Command::RPL_BOUNCE(responses::BOUNCE::default())),
             _ => Err(ParseError::UnrecognizedCommand),
-        }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use rand;
-    use super::super::Message;
-    use super::{ParseError, Command};
-    use super::requests as Requests;
-    use super::responses as Responses;
-
-    macro_rules! verify_parse {
-        ($deserialized:expr, $raw:expr) => {
-            assert_eq!($raw.parse::<Message>().unwrap(), $deserialized);
-        }
-    }
-
-    macro_rules! verify_noparse{
-        ($raw:expr) => {
-            assert!($raw.parse::<Message>().is_err());
-        };
-
-        ($err_kind:expr, $raw:expr) => {
-            assert_eq!($raw.parse::<Message>().err().unwrap(), $err_kind);
-        }
-    }
-
-    #[test]
-    fn test_parse() {
-        verify_parse!(
-            Message {
-                prefix: Some("Laza".to_string()),
-                command: Command::NICK(Requests::Nick { nickname: "lazau".to_string() }),
-            },
-            ":Laza NICK :lazau"
-        );
-
-        verify_parse!(
-            Message {
-                prefix: Some("Laza".to_string()),
-                command: Command::NICK(Requests::Nick { nickname: "lazau".to_string() }),
-            },
-            ":Laza NICK   :lazau"
-        );
-
-        verify_parse!(
-            Message {
-                prefix: None,
-                command: Command::NICK(Requests::Nick { nickname: "lazau".to_string() }),
-            },
-            "NICK      lazau"
-        );
-
-        verify_parse!(
-            Message {
-                prefix: None,
-                command: Command::USER(Requests::User {
-                    username: "d".to_string(),
-                    mode: 0,
-                    unused: "d".to_string(),
-                    realname: "g".to_string(),
-                }),
-            },
-            "USER d 0 d g"
-        );
-
-        verify_parse!(
-            Message {
-                prefix: None,
-                command: Command::ERR_NEEDMOREPARAMS(Responses::NEEDMOREPARAMS::default()),
-            },
-            "461"
-        )
-    }
-
-    #[test]
-    fn test_parse_failure() {
-        verify_noparse!(ParseError::NoCommand, ":Hello");
-        verify_noparse!(ParseError::NoCommand, ":");
-        verify_noparse!(ParseError::NoCommand, "");
-        verify_noparse!(ParseError::UnrecognizedCommand, "whatacommand");
-        verify_noparse!(ParseError::UnrecognizedCommand, ":a whatacommand sd dd :ee");
-    }
-
-    #[test]
-    fn fuzz() {
-        let (max_input_len, cases) = (1024, 1000);
-        for _ in 0..cases {
-            let len = rand::random::<u32>() % max_input_len;
-            let mut input = String::with_capacity(len as usize);
-            for _ in 0..len {
-                input.push(rand::random::<char>());
-            }
-            println!("Testing {} : {:?}", input, input.parse::<Message>());
         }
     }
 }

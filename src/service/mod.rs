@@ -3,6 +3,7 @@ mod messages;
 mod data;
 mod processor;
 mod stats;
+mod templates;
 
 use chrono;
 use hostname;
@@ -33,14 +34,22 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
     let thread_pool = CpuPool::new_num_cpus();
     let lis = TcpListener::bind(&local_addr, &handle).unwrap();
 
-    let server = Arc::new(Mutex::new(data::Server::new(
+    // Immutable configuration.
+    let configuration = Arc::new(data::Configuration::new(
         chrono::offset::Utc::now(),
         "0.1".to_string(),
-    )));
+    ));
+    let server = Arc::new(Mutex::new(data::Server::new()));
 
-    stats::start_stats_server(http, &handle, Arc::clone(&server));
+    stats::start_stats_server(
+        http,
+        &handle,
+        Arc::clone(&configuration),
+        Arc::clone(&server),
+    );
 
     let srv = lis.incoming().for_each(|(stream, addr)| {
+        let configuration = Arc::clone(&configuration);
         let server = Arc::clone(&server);
         // Create client connection.
         handle.spawn(thread_pool.spawn_fn(move || {
@@ -96,6 +105,7 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                                 }
                             };
                             processor::process_message(
+                                Arc::clone(&configuration),
                                 Arc::clone(&client_handle),
                                 server_prefix,
                                 message,

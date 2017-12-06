@@ -1,3 +1,4 @@
+use std::iter;
 use std::sync::{Arc, Mutex};
 
 use super::data;
@@ -5,6 +6,7 @@ use super::messages::Message;
 use super::messages::commands::Command;
 use super::messages::commands::requests as Requests;
 use super::messages::commands::responses as Responses;
+use super::templates;
 
 macro_rules! error_resp {
     ($prefix:ident, $err:expr) => {
@@ -26,6 +28,7 @@ macro_rules! verify_registered {
 }
 
 pub fn process_message(
+    configuration: Arc<data::Configuration>,
     client: Arc<Mutex<data::Client>>,
     server_prefix: Option<String>,
     req: Message,
@@ -47,7 +50,7 @@ pub fn process_message(
                 .lock()
                 .unwrap()
                 .replace_nick(&client, nick.clone())
-                .err() == Some(data::ServerError::NickInUse)
+                .err() == Some(data::Error::NickInUse)
             {
                 error_resp!(
                     server_prefix,
@@ -57,7 +60,7 @@ pub fn process_message(
             }
             client.nick = Some(nick);
 
-            maybe_welcome_sequence(&client, server_prefix)
+            maybe_welcome_sequence(&configuration, &client, server_prefix)
         }
 
         Command::USER(Requests::User {
@@ -72,15 +75,38 @@ pub fn process_message(
                 realname: realname,
             });
 
-            maybe_welcome_sequence(&client, server_prefix)
+            maybe_welcome_sequence(&configuration, &client, server_prefix)
         }
 
         Command::JOIN(Requests::Join { join: jt }) => {
+            //let mut client = client.lock().unwrap();
+            //let mut server = client.server.lock().unwrap();
+            let chan_data;
             match jt {
-                Requests::JoinChannels::PartAll => unimplemented!(),
-                Requests::JoinChannels::KeyedChannels(r) => unimplemented!(),
-                Requests::JoinChannels::Channels(r) => unimplemented!(),
-            }
+                Requests::JoinChannels::PartAll => {
+                    client.lock().unwrap().part_all();
+                    return Vec::new();
+                }
+                Requests::JoinChannels::Channels(r) => {
+                    chan_data = client.lock().unwrap().join(
+                        r.iter()
+                            .zip(iter::repeat(None))
+                            .collect(),
+                    );
+                }
+                Requests::JoinChannels::KeyedChannels(r) => {
+                    let mut chans = Vec::new();
+                    let mut keys: Vec<Option<&String>> = Vec::new();
+                    for &(c, k) in r.iter() {
+                        chans.push(c);
+                        keys.push(Some(k.clone()));
+                    }
+                    chan_data = client.lock().unwrap().join(
+                        chans.iter().zip(keys).collect(),
+                    );
+                }
+            };
+            unimplemented!()
             /*if keys.len() > 0 && channels.len() != keys.len() {
                 error_resp!(
                     server_prefix,
@@ -119,7 +145,6 @@ pub fn process_message(
                             ]
                         })
                         .collect()*/
-            unimplemented!()
         }
 
         u @ _ => {
@@ -130,31 +155,61 @@ pub fn process_message(
 }
 
 // Returns WELCOME sequence if client has successfully registered.
-fn maybe_welcome_sequence(client: &data::Client, server_prefix: Option<String>) -> Vec<Message> {
+fn maybe_welcome_sequence(
+    configuration: &data::Configuration,
+    client: &data::Client,
+    server_prefix: Option<String>,
+) -> Vec<Message> {
     if client.user.is_none() || client.nick.is_none() {
         return Vec::new();
+    }
+
+    #[derive(Serialize)]
+    struct WelcomeData<'a> {
+        network_name: &'a str,
+        nick: &'a str,
     }
 
     vec![
         Message {
             prefix: server_prefix.clone(),
-            command: Command::RPL_WELCOME(Responses::WELCOME {
-                message: Some(
-                    "Welcome to the <networkname> Network, <nick>[!<user>@<host>]".to_string(),
-                ),
+            command: Command::RPL_WELCOME(Responses::Welcome {
+                nick: client.nick.as_ref().unwrap().clone(),
+                message: configuration
+                    .template_engine
+                    .render(
+                        templates::RPL_WELCOME_TEMPLATE_NAME,
+                        &WelcomeData {
+                            network_name: &configuration.network_name,
+                            nick: client.nick.as_ref().unwrap(),
+                        },
+                    )
+                    .unwrap(),
             }),
         },
         Message {
             prefix: server_prefix.clone(),
-            command: Command::RPL_YOURHOST(Responses::YOURHOST::default()),
+            command: Command::RPL_YOURHOST(Responses::YourHost {
+                nick: client.nick.as_ref().unwrap().clone(),
+                message: configuration
+                    .template_engine
+                    .render(templates::RPL_YOURHOST_TEMPLATE_NAME, &configuration)
+                    .unwrap(),
+            }),
         },
         Message {
             prefix: server_prefix.clone(),
-            command: Command::RPL_CREATED(Responses::CREATED::default()),
+            command: Command::RPL_CREATED(Responses::Created {
+                nick: client.nick.as_ref().unwrap().clone(),
+                message: configuration
+                    .template_engine
+                    .render(templates::RPL_CREATED_TEMPLATE_NAME, &configuration)
+                    .unwrap(),
+            }),
         },
         Message {
             prefix: server_prefix.clone(),
-            command: Command::RPL_MYINFO(Responses::MYINFO::default()),
+            command: Command::RPL_MYINFO(Responses::MyInfo::default()),
         },
     ]
 }

@@ -84,7 +84,7 @@ pub struct USERSDISABLED {}
 pub struct NOTREGISTERED {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct NEEDMOREPARAMS {
+pub struct NeedMoreParams {
     pub command: String,
 }
 
@@ -407,18 +407,25 @@ pub struct BADCHANMASK {}
 pub struct NOSERVICEHOST {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct WELCOME {
-    pub message: Option<String>,
+pub struct Welcome {
+    pub nick: String,
+    pub message: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct YOURHOST {}
+pub struct YourHost {
+    pub nick: String,
+    pub message: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct CREATED {}
+pub struct Created {
+    pub nick: String,
+    pub message: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct MYINFO {}
+pub struct MyInfo {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct ISUPPORT {}
@@ -588,7 +595,7 @@ impl fmt::Display for NOTREGISTERED {
     }
 }
 
-impl fmt::Display for NEEDMOREPARAMS {
+impl fmt::Display for NeedMoreParams {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
         write!(f, "461 {} :Not enough parameters", self.command)
     }
@@ -1230,28 +1237,25 @@ impl fmt::Display for NOSERVICEHOST {
     }
 }
 
-impl fmt::Display for WELCOME {
+impl fmt::Display for Welcome {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        match self.message {
-            Some(ref s) => write!(f, "001 {}", s),
-            None => write!(f, "001"),
-        }
+        write!(f, "001 {} :{}", self.nick, self.message)
     }
 }
 
-impl fmt::Display for YOURHOST {
+impl fmt::Display for YourHost {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "002")
+        write!(f, "002 {} :{}", self.nick, self.message)
     }
 }
 
-impl fmt::Display for CREATED {
+impl fmt::Display for Created {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "003")
+        write!(f, "003 {} :{}", self.nick, self.message)
     }
 }
 
-impl fmt::Display for MYINFO {
+impl fmt::Display for MyInfo {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
         write!(f, "004")
     }
