@@ -14,14 +14,15 @@ use tokio_core::reactor::Handle;
 use tokio_io::io::{lines, write_all};
 use tokio_io::AsyncRead;
 
-use super::data;
+use super::client;
+use super::server;
 use super::templates;
 
 pub fn start_stats_server(
     http: Option<SocketAddr>,
     reactor: &Handle,
-    configuration: Arc<data::Configuration>,
-    server: Arc<Mutex<data::Server>>,
+    configuration: Arc<server::Configuration>,
+    server: Arc<Mutex<server::Server>>,
 ) {
     if http.is_none() {
         return;
@@ -62,7 +63,7 @@ pub fn start_stats_server(
 
 static DEBUG_HTTP_RESP: &'static str = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
 
-fn render(configuration: Arc<data::Configuration>, server: Arc<Mutex<data::Server>>) -> String {
+fn render(configuration: Arc<server::Configuration>, server: Arc<Mutex<server::Server>>) -> String {
     let maybe_serialized = serialize(Arc::clone(&configuration), server);
     if let Err(e) = maybe_serialized {
         return format!("Cannot serialize server data for rendering: {}", e);
@@ -94,8 +95,8 @@ struct DebugOutputData {
 
 
 fn serialize(
-    configuration: Arc<data::Configuration>,
-    server: Arc<Mutex<data::Server>>,
+    configuration: Arc<server::Configuration>,
+    server: Arc<Mutex<server::Server>>,
 ) -> Result<DebugOutputData, String> {
     let configuration_serialized = serde_yaml::to_string(configuration.deref()).map_err(|e| {
         e.to_string()
@@ -103,7 +104,7 @@ fn serialize(
 
     let mut heading_number = 0;
     let mut addr_to_heading = HashMap::new();
-    let mut connections_cloned: Vec<Arc<Mutex<data::Client>>> = Vec::new();
+    let mut connections_cloned: Vec<Arc<Mutex<client::Client>>> = Vec::new();
     let mut nick_to_connections_serialized = HashMap::new();
     {
         let server = server.lock().unwrap();

@@ -1,14 +1,13 @@
 mod codec;
 mod messages;
-mod data;
-mod processor;
+mod server;
 mod stats;
 mod templates;
+mod client;
 
 use chrono;
-use hostname;
 
-use std::io;
+use std::{io, fmt};
 use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 
@@ -20,6 +19,20 @@ use futures_cpupool::CpuPool;
 use tokio_core::net::TcpListener;
 use tokio_core::reactor::Core;
 use tokio_io::AsyncRead;
+
+// Used to identify clients.
+// Server is represented by (local, local) pair.
+#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
+pub struct SocketPair {
+    pub local: SocketAddr,
+    pub remote: SocketAddr,
+}
+
+impl fmt::Display for SocketPair {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "({} : {})", self.local, self.remote)
+    }
+}
 
 // A union of socket events and server-wide events.
 #[derive(Debug)]
@@ -35,11 +48,11 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
     let lis = TcpListener::bind(&local_addr, &handle).unwrap();
 
     // Immutable configuration.
-    let configuration = Arc::new(data::Configuration::new(
+    let configuration = Arc::new(server::Configuration::new(
         chrono::offset::Utc::now(),
         "0.1".to_string(),
     ));
-    let server = Arc::new(Mutex::new(data::Server::new()));
+    let server = Arc::new(Mutex::new(server::Server::new()));
 
     stats::start_stats_server(
         http,
@@ -53,12 +66,12 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
         let server = Arc::clone(&server);
         // Create client connection.
         handle.spawn(thread_pool.spawn_fn(move || {
-            let socket = data::SocketPair {
+            let socket = SocketPair {
                 local: local_addr,
                 remote: addr,
             };
             let client = Arc::new(Mutex::new(
-                data::Client::new(socket.clone(), Arc::clone(&server)),
+                client::Client::new(socket.clone(), Arc::clone(&server)),
             ));
 
             // TODO(lazau): How large should this buffer be?
@@ -74,6 +87,8 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
             let client_handle = Arc::clone(&client);
             // Refcount for cleanup future.
             let client_cleanup = Arc::clone(&client);
+            // Refcount for serialization future.
+            let configuration_serialization = Arc::clone(&configuration);
 
             let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
             stream
@@ -91,8 +106,6 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                         error!("Unexpected upstream error: {:?}.", err);
                         return future::err(err);
                     }
-                    let server_prefix =
-                        Some(hostname::get_hostname().expect("unable to get hostname"));
 
                     let res = match event.unwrap() {
                         ClientEvent::Socket(s) => {
@@ -104,10 +117,9 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                                     return future::ok(Vec::new());
                                 }
                             };
-                            processor::process_message(
+                            client::process_message(
                                 Arc::clone(&configuration),
                                 Arc::clone(&client_handle),
-                                server_prefix,
                                 message,
                             )
                         }
@@ -118,14 +130,17 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                     };
                     future::ok(res)
                 })
-                .then(|messages: Result<Vec<messages::Message>, _>| {
+                .then(move |messages: Result<Vec<messages::Message>, _>| {
                     // ** Serialization future.
                     if messages.is_err() {
                         return future::err(messages.err().unwrap());
                     }
                     let mut result = Vec::new();
                     // TODO(lazau): Perform 512 max line size here.
-                    for m in messages.unwrap() {
+                    for mut m in messages.unwrap() {
+                        if m.prefix.is_none() {
+                            m.prefix = Some(configuration_serialization.hostname.clone());
+                        }
                         // TODO(lazau): Convert serialization error to future::err.
                         result.push(format!("{}", m));
                     }

@@ -1,18 +1,19 @@
 use std::iter;
 use std::sync::{Arc, Mutex};
 
-use super::data;
-use super::messages::Message;
-use super::messages::commands::Command;
-use super::messages::commands::requests as Requests;
-use super::messages::commands::responses as Responses;
-use super::templates;
+use super::super::server::{Configuration, Server, ServerError};
+use super::{Client, User};
+use super::super::messages::Message;
+use super::super::messages::commands::Command;
+use super::super::messages::commands::requests as Requests;
+use super::super::messages::commands::responses as Responses;
+use super::super::templates;
 
 macro_rules! error_resp {
-    ($prefix:ident, $err:expr) => {
+    ($err:expr) => {
         return vec![
             Message {
-                prefix: $prefix,
+                prefix: None,
                 command: $err,
             },
         ];
@@ -28,16 +29,14 @@ macro_rules! verify_registered {
 }
 
 pub fn process_message(
-    configuration: Arc<data::Configuration>,
-    client: Arc<Mutex<data::Client>>,
-    server_prefix: Option<String>,
+    configuration: Arc<Configuration>,
+    client: Arc<Mutex<Client>>,
     req: Message,
 ) -> Vec<Message> {
     trace!(
-        "Processing request [{:?}].\nClient state: {:?}.\nServer prefix: {:?}.",
+        "Processing request [{:?}].\nClient state: {:?}.",
         req,
         client,
-        server_prefix
     );
 
     match req.command {
@@ -50,17 +49,16 @@ pub fn process_message(
                 .lock()
                 .unwrap()
                 .replace_nick(&client, nick.clone())
-                .err() == Some(data::Error::NickInUse)
+                .err() == Some(ServerError::NickInUse)
             {
-                error_resp!(
-                    server_prefix,
-                    Command::ERR_NICKNAMEINUSE(Responses::NICKNAMEINUSE { nick: nick.clone() })
-                );
+                error_resp!(Command::ERR_NICKNAMEINUSE(
+                    Responses::NICKNAMEINUSE { nick: nick.clone() },
+                ));
 
             }
             client.nick = Some(nick);
 
-            maybe_welcome_sequence(&configuration, &client, server_prefix)
+            maybe_welcome_sequence(&configuration, &client)
         }
 
         Command::USER(Requests::User {
@@ -70,46 +68,41 @@ pub fn process_message(
                           realname,
                       }) => {
             let mut client = client.lock().unwrap();
-            client.user = Some(data::User {
+            client.user = Some(User {
                 username: username,
                 realname: realname,
             });
 
-            maybe_welcome_sequence(&configuration, &client, server_prefix)
+            maybe_welcome_sequence(&configuration, &client)
         }
 
         Command::JOIN(Requests::Join { join: jt }) => {
             //let mut client = client.lock().unwrap();
             //let mut server = client.server.lock().unwrap();
-            let chan_data;
             match jt {
                 Requests::JoinChannels::PartAll => {
                     client.lock().unwrap().part_all();
-                    return Vec::new();
+                    Vec::new()
                 }
                 Requests::JoinChannels::Channels(r) => {
-                    chan_data = client.lock().unwrap().join(
+                    client.lock().unwrap().join(
                         r.iter()
                             .zip(iter::repeat(None))
                             .collect(),
-                    );
+                    )
                 }
                 Requests::JoinChannels::KeyedChannels(r) => {
-                    let mut chans = Vec::new();
-                    let mut keys: Vec<Option<&String>> = Vec::new();
-                    for &(c, k) in r.iter() {
-                        chans.push(c);
-                        keys.push(Some(k.clone()));
-                    }
-                    chan_data = client.lock().unwrap().join(
-                        chans.iter().zip(keys).collect(),
-                    );
+                    let (chans, keys): (Vec<String>, Vec<String>) = r.into_iter().unzip();
+                    client.lock().unwrap().join(
+                        chans
+                            .iter()
+                            .zip(keys.iter().map(|k| Some(k)))
+                            .collect(),
+                    )
                 }
-            };
-            unimplemented!()
+            }
             /*if keys.len() > 0 && channels.len() != keys.len() {
-                error_resp!(
-                    server_prefix,
+                error_resp!( server_prefix,
                     Command::ERR_NEEDMOREPARAMS(
                         Responses::NEEDMOREPARAMS { command: "JOIN".to_string() },
                     )
@@ -155,11 +148,7 @@ pub fn process_message(
 }
 
 // Returns WELCOME sequence if client has successfully registered.
-fn maybe_welcome_sequence(
-    configuration: &data::Configuration,
-    client: &data::Client,
-    server_prefix: Option<String>,
-) -> Vec<Message> {
+fn maybe_welcome_sequence(configuration: &Configuration, client: &Client) -> Vec<Message> {
     if client.user.is_none() || client.nick.is_none() {
         return Vec::new();
     }
@@ -172,7 +161,7 @@ fn maybe_welcome_sequence(
 
     vec![
         Message {
-            prefix: server_prefix.clone(),
+            prefix: None,
             command: Command::RPL_WELCOME(Responses::Welcome {
                 nick: client.nick.as_ref().unwrap().clone(),
                 message: configuration
@@ -188,7 +177,7 @@ fn maybe_welcome_sequence(
             }),
         },
         Message {
-            prefix: server_prefix.clone(),
+            prefix: None,
             command: Command::RPL_YOURHOST(Responses::YourHost {
                 nick: client.nick.as_ref().unwrap().clone(),
                 message: configuration
@@ -198,7 +187,7 @@ fn maybe_welcome_sequence(
             }),
         },
         Message {
-            prefix: server_prefix.clone(),
+            prefix: None,
             command: Command::RPL_CREATED(Responses::Created {
                 nick: client.nick.as_ref().unwrap().clone(),
                 message: configuration
@@ -208,7 +197,7 @@ fn maybe_welcome_sequence(
             }),
         },
         Message {
-            prefix: server_prefix.clone(),
+            prefix: None,
             command: Command::RPL_MYINFO(Responses::MyInfo::default()),
         },
     ]

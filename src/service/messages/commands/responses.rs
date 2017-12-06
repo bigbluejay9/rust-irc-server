@@ -194,7 +194,11 @@ pub struct CHANNELMODEIS {}
 pub struct NOTOPIC {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct TOPIC {}
+pub struct Topic {
+    nick: String,
+    channel: String,
+    topic: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct INVITING {}
@@ -212,7 +216,13 @@ pub struct WHOREPLY {}
 pub struct ENDOFWHO {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct NAMREPLY {}
+pub struct NamReply {
+    nick: String,
+    symbol: String,
+    channel: String,
+    // (Prefix, Nick).
+    members: Vec<(String, String)>,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct ENDOFNAMES {}
@@ -811,9 +821,9 @@ impl fmt::Display for NOTOPIC {
     }
 }
 
-impl fmt::Display for TOPIC {
+impl fmt::Display for Topic {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "332")
+        write!(f, "332 {} {} :{}", self.nick, self.channel, self.topic)
     }
 }
 
@@ -847,9 +857,13 @@ impl fmt::Display for ENDOFWHO {
     }
 }
 
-impl fmt::Display for NAMREPLY {
+impl fmt::Display for NamReply {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "353")
+        write!(f, "353 {} {} {} :", self.nick, self.symbol, self.channel)?;
+        for &(ref pre, ref n) in self.members.iter() {
+            write!(f, "{}{}", pre, n)?;
+        }
+        Ok(())
     }
 }
 

@@ -5,32 +5,17 @@ use hostname;
 use serde::ser;
 
 use std;
-use std::ops::DerefMut;
 use std::collections::{HashSet, HashMap};
-use std::fmt;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use super::SocketPair;
+use super::client::Client;
 use super::templates;
 
 use futures::sync::mpsc;
 
-// Used to identify clients.
-// Server is represented by (local, local) pair.
-#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
-pub struct SocketPair {
-    pub local: SocketAddr,
-    pub remote: SocketAddr,
-}
-
-impl fmt::Display for SocketPair {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "({} : {})", self.local, self.remote)
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
-pub enum Error {
+pub enum ServerError {
     NickInUse,
     TryingToPartNonmemberChannel,
     Other,
@@ -84,28 +69,6 @@ pub struct Server {
     // Do not lock the clients in this map while holding Server lock, rather copy the arcs into a
     // different data structure and lock them once you've let go of the Server lock.
     pub connections: HashMap<SocketPair, Arc<Mutex<Client>>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Client {
-    // Unique per Client.
-    pub socket: SocketPair,
-
-    pub nick: Option<String>,
-    pub user: Option<User>,
-
-    pub channels: HashSet<String>,
-
-    // Implicity enforce locking order by only allowing Server access through client (thereby
-    // ensuring that the Client lock is held before the server).
-    #[serde(skip)]
-    pub server: Arc<Mutex<Server>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct User {
-    pub username: String,
-    pub realname: String,
 }
 
 pub fn chrono_datetime_serializer<S, X>(
@@ -176,7 +139,7 @@ impl Server {
         &mut self,
         client: &Client,
         new_nick: String,
-    ) -> Result<Option<String>, Error> {
+    ) -> Result<Option<String>, ServerError> {
         debug!(
             "Replacing nick [{:?}] with [{:?}] for {:?}.",
             client.nick,
@@ -184,7 +147,7 @@ impl Server {
             client
         );
         if self.nicks.contains(&new_nick) {
-            return Err(Error::NickInUse);
+            return Err(ServerError::NickInUse);
         }
 
         let old_nick_clone = client.nick.clone();
@@ -229,7 +192,7 @@ impl Server {
         client: &Client,
         channel: &String,
         key: Option<&String>,
-    ) -> Result<&Channel, Error> {
+    ) -> Result<&Channel, ServerError> {
         if self.channels.contains_key(channel) {
             unimplemented!()
         } else {
@@ -249,54 +212,5 @@ impl Server {
                     "trying to remove a client from channel without a nickname",
                 ))
         );
-    }
-}
-
-impl Client {
-    pub fn new(addr: SocketPair, server: Arc<Mutex<Server>>) -> Self {
-        Client {
-            socket: addr,
-            nick: None,
-            user: None,
-            server: server,
-            channels: HashSet::new(),
-        }
-    }
-
-    pub fn registered(&self) -> bool {
-        self.nick.is_some() && self.user.is_some()
-    }
-
-    pub fn join(
-        &mut self,
-        channels: Vec<(&String, Option<&String>)>,
-    ) -> Vec<(String, Vec<String>)> {
-        let mut server = self.server.lock().unwrap();
-        let mut result = Vec::new();
-        for &(c, key) in channels.iter() {
-            let chan = server.join(&self, c, key);
-            match chan {
-                Ok(chan) => result.push((chan.topic.clone(), chan.nicks.iter().cloned().collect())),
-                Err(e) => warn!("Failed to join channel {}: {:?}.", c, e),
-            };
-        }
-        result
-    }
-
-    pub fn part(&mut self, channel: &String, server: &mut Server) {
-        if !self.channels.remove(channel) {
-            warn!("Trying to part non-existant channel {}.", channel);
-            return;
-        }
-        server.remove_client_from_channel(channel, self);
-    }
-
-    pub fn part_all(&mut self) {
-        let cloned = Arc::clone(&self.server);
-        let mut server = cloned.lock().unwrap();
-        let channels_cloned = self.channels.clone();
-        for chan in channels_cloned.iter() {
-            self.part(chan, server.deref_mut());
-        }
     }
 }
