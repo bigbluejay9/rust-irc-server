@@ -1,8 +1,10 @@
 use std::iter;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use super::super::server::{Configuration, ServerError};
 use super::{Client, User};
+use super::super::Broadcast;
 use super::super::messages::Message;
 use super::super::messages::commands::Command;
 use super::super::messages::commands::requests as Requests;
@@ -25,11 +27,7 @@ pub fn process_message(
     client: Arc<Mutex<Client>>,
     req: Message,
 ) -> Vec<Message> {
-    trace!(
-        "Processing request [{:?}].\nClient state: {:?}.",
-        req,
-        client,
-    );
+    trace!("Client state: {:?}.", client);
 
     macro_rules! verify_registered {
         ($client:expr) => {
@@ -92,6 +90,12 @@ pub fn process_message(
                     client.join(chans.iter().zip(keys.iter().map(|k| Some(k))).collect())
                 }
             }
+        }
+
+        Command::PART(Requests::Part { channels, message }) => {
+            let mut client = client.lock().unwrap();
+            verify_registered!(client);
+            client.part(&channels, &message)
         }
 
         Command::MODE(Requests::Mode {
@@ -161,6 +165,33 @@ pub fn process_message(
         }
     }
 }
+
+pub fn process_broadcast(
+    configuration: Arc<Configuration>,
+    client: Arc<Mutex<Client>>,
+    b: Arc<Broadcast>,
+) -> Vec<Message> {
+    trace!("Client state: {:?}.", client);
+    match b.deref() {
+        &Broadcast::Join(ref user, ref channel) => {
+            vec![
+                Message {
+                    prefix: Some(format!("{}", user)),
+                    command: Command::JOIN(Requests::Join {
+                        join: Requests::JoinChannels::Channels(vec![channel.clone()]),
+                    }),
+                },
+            ]
+        }
+        &Broadcast::Part => unimplemented!(),
+        &Broadcast::PrivateMessage => unimplemented!(),
+        u @ _ => {
+            error!("Broadcast message {:?} not yet implemented.", u);
+            Vec::new()
+        }
+    }
+}
+
 
 // Returns WELCOME sequence if client has successfully registered.
 fn maybe_welcome_sequence(configuration: &Configuration, client: &Client) -> Vec<Message> {

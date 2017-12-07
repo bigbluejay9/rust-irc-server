@@ -8,16 +8,14 @@ use std;
 use std::collections::{HashSet, HashMap};
 use std::sync::{Arc, Mutex};
 
-use super::SocketPair;
+use super::{templates, SocketPair, Broadcast};
 use super::client::Client;
-use super::templates;
 
 use futures::sync::mpsc;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ServerError {
     NickInUse,
-    TryingToPartNonmemberChannel,
     Other,
 }
 
@@ -60,7 +58,7 @@ pub struct Server {
     channels: HashMap<String, Channel>,
 
     pub nick_to_client: HashMap<String, SocketPair>,
-    clients: HashMap<SocketPair, mpsc::Sender<String>>,
+    clients: HashMap<SocketPair, mpsc::Sender<Arc<Broadcast>>>,
 
     // Only used for stats generation.
     // Lock order:
@@ -168,7 +166,7 @@ impl Server {
         &mut self,
         socket: &SocketPair,
         client: Arc<Mutex<Client>>,
-        tx: mpsc::Sender<String>,
+        tx: mpsc::Sender<Arc<Broadcast>>,
     ) {
         assert!(self.clients.insert(socket.clone(), tx).is_none());
         assert!(self.connections.insert(socket.clone(), client).is_none());
@@ -187,6 +185,29 @@ impl Server {
         self.channels.get(channel)
     }
 
+    fn lookup_nick(&mut self, nick: &String) -> Option<&mut mpsc::Sender<Arc<Broadcast>>> {
+        if let Some(ref sp) = self.nick_to_client.get(nick) {
+            if let Some(s) = self.clients.get_mut(sp) {
+                return Some(s);
+            }
+        }
+        None
+    }
+
+    fn try_send_broadcast(&mut self, nick: &String, message: Arc<Broadcast>) {
+        if let Some(ref mut s) = self.lookup_nick(nick) {
+            if let Err(ref e) = s.try_send(message) {
+                if e.is_disconnected() {
+                    error!("Trying to broadcast to dropped TX for {}.", nick);
+                } else if e.is_full() {
+                    error!("Trying to broadcast to full TX for {}.", nick);
+                }
+            }
+        } else {
+            warn!("Can't broadcast {:?} to {}.", message, nick);
+        }
+    }
+
     pub fn join(
         &mut self,
         client: &Client,
@@ -194,12 +215,25 @@ impl Server {
         key: Option<&String>,
     ) -> Result<&Channel, ServerError> {
         if self.channels.contains_key(channel) {
-            unimplemented!()
+            let chan = self.channels.get(channel).unwrap();
+            let msg = Arc::new(Broadcast::Join(
+                client.user_prefix(),
+                client.nick.as_ref().unwrap().clone(),
+            ));
+            for n in chan.nicks.iter() {
+                //self.try_send_broadcast(n, Arc::clone(&msg));
+                unimplemented!()
+            }
+        // TODO(permission checks and all that).
         } else {
             let new_channel = Channel::new(channel);
             assert!(self.channels.insert(channel.clone(), new_channel).is_none());
-            Ok(self.channels.get(channel).unwrap())
         }
+        Ok(self.channels.get(channel).unwrap())
+    }
+
+    pub fn part(&mut self, channel: &String, message: &Option<String>) {
+        //unimplemented!()
     }
 
     pub fn remove_client_from_channel(&mut self, channel: &String, client: &Client) {

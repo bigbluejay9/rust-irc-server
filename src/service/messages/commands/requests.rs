@@ -358,8 +358,25 @@ impl fmt::Display for Squit {
 
 impl fmt::Display for Join {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "JOIN");
-        unimplemented!()
+        match &self.join {
+            &JoinChannels::PartAll => {
+                error!("Trying to serialize JOIN: PartAll. {:?}.", self);
+                Ok(())
+            }
+            &JoinChannels::KeyedChannels(_) => {
+                error!("Trying to serialize JOIN: KeyedChannels. {:?}.", self);
+                Ok(())
+            }
+            &JoinChannels::Channels(ref chan) => {
+                if chan.len() > 1 {
+                    warn!(
+                        "Trying to serialize JOIN with more than one channel. This is not backwards compatible! {:?}",
+                        self
+                    );
+                }
+                write!(f, "JOIN {}", chan.join(","))
+            }
+        }
     }
 }
 

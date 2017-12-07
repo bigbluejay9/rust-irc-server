@@ -1,8 +1,13 @@
-# Rust IRC Server
+# IRC Server
 
 [![Build
 Status](https://travis-ci.org/lazau/rust-irc-server.svg?branch=master)](https://travis-ci.org/lazau/rust-irc-server)
 
-An implementation of an IRC server in Rust.
+IRC server in Rust.
+
+Contributions welcome.
+
+Trying to be compliant with https://tools.ietf.org/html/rfc2812 and
+https://modern.ircdocs.horse/.
 
 Laza Upatising

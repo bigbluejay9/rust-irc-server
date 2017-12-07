@@ -38,7 +38,14 @@ impl fmt::Display for SocketPair {
 #[derive(Debug)]
 enum ClientEvent {
     Socket(String),
-    Broadcast(String),
+    Broadcast(Arc<Broadcast>),
+}
+
+#[derive(Debug)]
+pub enum Broadcast {
+    Join(client::UserPrefix, String),
+    Part,
+    PrivateMessage,
 }
 
 pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
@@ -117,6 +124,7 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                                     return future::ok(Vec::new());
                                 }
                             };
+                            debug!("Request [{:?}].", message);
                             client::process_message(
                                 Arc::clone(&configuration),
                                 Arc::clone(&client_handle),
@@ -124,10 +132,16 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                             )
                         }
 
-                        ClientEvent::Broadcast(_b) => {
-                            unimplemented!("Unimplemented branch arm - broadcast message.");
+                        ClientEvent::Broadcast(b) => {
+                            debug!("Broadcast [{:?}].", b);
+                            client::process_broadcast(
+                                Arc::clone(&configuration),
+                                Arc::clone(&client_handle),
+                                b,
+                            )
                         }
                     };
+                    debug!("Response [{:?}].", res);
                     future::ok(res)
                 })
                 .then(move |messages: Result<Vec<messages::Message>, _>| {
