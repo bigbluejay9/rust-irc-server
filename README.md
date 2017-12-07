@@ -5,6 +5,4 @@ Status](https://travis-ci.org/lazau/rust-irc-server.svg?branch=master)](https://
 
 An implementation of an IRC server in Rust.
 
-Learning how to do async IO with https://github.com/tokio-rs/tokio.
-
 Laza Upatising
