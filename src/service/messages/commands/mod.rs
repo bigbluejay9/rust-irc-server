@@ -113,8 +113,8 @@ pub enum Command {
     ERR_CHANOPRIVSNEEDED(responses::CHANOPRIVSNEEDED),
     ERR_CANTKILLSERVER(responses::CANTKILLSERVER),
     ERR_NOOPERHOST(responses::NOOPERHOST),
-    ERR_UMODEUNKNOWNFLAG(responses::UMODEUNKNOWNFLAG),
-    ERR_USERSDONTMATCH(responses::USERSDONTMATCH),
+    ERR_UMODEUNKNOWNFLAG(responses::UModeUnknownFlag),
+    ERR_USERSDONTMATCH(responses::UsersDontMatch),
     // 6.2 Command responses.
     RPL_NONE(responses::NONE),
     RPL_USERHOST(responses::USERHOST),
@@ -485,7 +485,7 @@ impl str::FromStr for Command {
                 let p = try!(extract_params(r, 4, "USER"));
                 Ok(Command::USER(requests::User {
                     username: rf!(p, 0, String),
-                    mode: rf!(p, 1, u32),
+                    mode: rf!(p, 1, String),
                     unused: rf!(p, 2, String),
                     realname: rf!(p, 3, String),
                 }))
@@ -579,8 +579,9 @@ impl str::FromStr for Command {
                 let p = try!(extract_params(r, 1, "MODE"));
                 Ok(Command::MODE(requests::Mode {
                     target: rf!(p, 0, String),
-                    modespec: if p.len() > 1 {
-                        Some(p[1..].join(" "))
+                    mode_string: of!(p, 1, String),
+                    mode_args: if p.len() > 2 {
+                        Some(p[2..].join(" "))
                     } else {
                         None
                     },
@@ -992,10 +993,10 @@ impl str::FromStr for Command {
             )),
             "491" => Ok(Command::ERR_NOOPERHOST(responses::NOOPERHOST::default())),
             "501" => Ok(Command::ERR_UMODEUNKNOWNFLAG(
-                responses::UMODEUNKNOWNFLAG::default(),
+                responses::UModeUnknownFlag::default(),
             )),
             "502" => Ok(Command::ERR_USERSDONTMATCH(
-                responses::USERSDONTMATCH::default(),
+                responses::UsersDontMatch::default(),
             )),
             "300" => Ok(Command::RPL_NONE(responses::NONE::default())),
             "302" => Ok(Command::RPL_USERHOST(responses::USERHOST::default())),

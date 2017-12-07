@@ -2,6 +2,8 @@ mod processor;
 
 pub use self::processor::process_message;
 
+use std::str;
+use std::clone::Clone;
 use std::ops::DerefMut;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -12,6 +14,37 @@ use super::messages::Message;
 use super::messages::commands::Command;
 use super::messages::commands::requests as Requests;
 use super::messages::commands::responses as Responses;
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize)]
+pub enum UserMode {
+    Away,
+    Invisible,
+    WallOps,
+    Restricted,
+    Operator,
+    LocalOperator,
+    ServerNotices,
+}
+
+impl str::FromStr for UserMode {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() > 1 {
+            return Err(());
+        }
+
+        match s.as_ref() {
+            "a" => Ok(UserMode::Away),
+            "i" => Ok(UserMode::Invisible),
+            "w" => Ok(UserMode::WallOps),
+            "r" => Ok(UserMode::Restricted),
+            "o" => Ok(UserMode::Operator),
+            "O" => Ok(UserMode::LocalOperator),
+            "s" => Ok(UserMode::ServerNotices),
+            _ => Err(()),
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct User {
@@ -27,6 +60,8 @@ pub struct Client {
     pub nick: Option<String>,
     pub user: Option<User>,
 
+    pub modes: HashSet<UserMode>,
+
     pub channels: HashSet<String>,
 
     // Implicity enforce locking order by only allowing Server access through client (thereby
@@ -35,12 +70,18 @@ pub struct Client {
     pub server: Arc<Mutex<Server>>,
 }
 
+pub enum SetMode {
+    Add,
+    Remove,
+}
+
 impl Client {
     pub fn new(addr: SocketPair, server: Arc<Mutex<Server>>) -> Self {
         Client {
             socket: addr,
             nick: None,
             user: None,
+            modes: HashSet::new(),
             server: server,
             channels: HashSet::new(),
         }
@@ -54,9 +95,13 @@ impl Client {
     pub fn join(&mut self, channels: Vec<(&String, Option<&String>)>) -> Vec<Message> {
         let mut server = self.server.lock().unwrap();
         let mut result = Vec::new();
-        let mut chans: Vec<&Channel> = Vec::new();
         for &(c, key) in channels.iter() {
             let chan = server.join(&self, c, key);
+            if chan.is_err() {
+                warn!("Failed to join {}: {:?}.", c, chan.err().unwrap());
+                continue;
+            }
+            let chan = chan.unwrap();
             result.push(Message {
                 prefix: None,
                 command: Command::JOIN(Requests::Join {
@@ -66,7 +111,7 @@ impl Client {
             result.push(Message {
                 prefix: None,
                 command: Command::RPL_TOPIC(Responses::Topic {
-                    nick: self.nick.unwrap(),
+                    nick: self.nick.as_ref().unwrap().clone(),
                     channel: c.clone(),
                     topic: chan.topic.clone(),
                 }),
@@ -74,7 +119,7 @@ impl Client {
             result.push(Message {
                 prefix: None,
                 command: Command::RPL_NAMREPLY(Responses::NamReply {
-                    nick: self.nick.unwrap(),
+                    nick: self.nick.as_ref().unwrap().clone(),
                     // XXX
                     symbol: "".to_string(),
                     channel: c.clone(),
@@ -82,50 +127,12 @@ impl Client {
                     members: chan.nicks
                         .iter()
                         .cloned()
-                        .map(|n| ("".to_string, n))
+                        .map(|n| ("".to_string(), n))
                         .collect(),
                 }),
             });
-            match chan {
-                Ok(chan) => chans.push(chan),
-                Err(e) => warn!("Failed to join channel {}: {:?}.", c, e),
-            };
         }
-        /*chans
-            .into_iter()
-            .flat_map(|chan| {
-                let mut resp = vec![
-                    Message {
-                        prefix: "".to_string(),
-                        command: Command::JOIN(Requests::Join {
-                            join: Requests::JoinChannels::Channels(vec![chan.clone()]),
-                        }),
-                    },
-                    Message {
-                        prefix: "".to_string(),
-                        command: Command::RPL_TOPIC(Responses::Topic {
-                            nick: self.nick.unwrap(),
-                            channel: chan.clone(),
-                            topic: topic,
-                        }),
-                    },
-                ];
-
-                for n in nicks.into_iter() {
-                    resp.push(Message {
-                        prefix: "".to_string(),
-                        command: Command::RPL_NAMREPLY(Responses::NamReply {
-                            nick: self.nick.unwrap(),
-                            symbol: "".to_string(),
-                            channel: chan,
-                            // (Prefix, Nick).
-                            members: Vec::new(),
-                        }),
-                    });
-                }
-            })
-            .collect();*/
-        unimplemented!()
+        result
     }
 
     pub fn part(&mut self, channel: &String, server: &mut Server) {
@@ -142,6 +149,15 @@ impl Client {
         let channels_cloned = self.channels.clone();
         for chan in channels_cloned.iter() {
             self.part(chan, server.deref_mut());
+        }
+    }
+
+    pub fn set_mode(&mut self, set: &SetMode, mode: &Vec<UserMode>) {
+        for m in mode.iter() {
+            match set {
+                &SetMode::Add => self.modes.insert(m.clone()),
+                &SetMode::Remove => self.modes.remove(m),
+            };
         }
     }
 }

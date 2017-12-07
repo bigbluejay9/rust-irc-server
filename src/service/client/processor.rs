@@ -1,7 +1,7 @@
 use std::iter;
 use std::sync::{Arc, Mutex};
 
-use super::super::server::{Configuration, Server, ServerError};
+use super::super::server::{Configuration, ServerError};
 use super::{Client, User};
 use super::super::messages::Message;
 use super::super::messages::commands::Command;
@@ -20,14 +20,6 @@ macro_rules! error_resp {
     };
 }
 
-macro_rules! verify_registered {
-    ($prefix:ident, $client:expr) => {
-        if !$client.registered() {
-            error_resp!($prefix, Command::ERR_NOTREGISTERED(Responses::NOTREGISTERED::default()));
-        }
-    }
-}
-
 pub fn process_message(
     configuration: Arc<Configuration>,
     client: Arc<Mutex<Client>>,
@@ -38,6 +30,14 @@ pub fn process_message(
         req,
         client,
     );
+
+    macro_rules! verify_registered {
+        ($client:expr) => {
+            if !$client.registered() {
+                error_resp!(Command::ERR_NOTREGISTERED(Responses::NOTREGISTERED::default()));
+            }
+        }
+    }
 
     match req.command {
         Command::NICK(Requests::Nick { nickname: nick }) => {
@@ -77,67 +77,82 @@ pub fn process_message(
         }
 
         Command::JOIN(Requests::Join { join: jt }) => {
-            //let mut client = client.lock().unwrap();
-            //let mut server = client.server.lock().unwrap();
+            let mut client = client.lock().unwrap();
+            verify_registered!(client);
             match jt {
                 Requests::JoinChannels::PartAll => {
-                    client.lock().unwrap().part_all();
+                    client.part_all();
                     Vec::new()
                 }
                 Requests::JoinChannels::Channels(r) => {
-                    client.lock().unwrap().join(
-                        r.iter()
-                            .zip(iter::repeat(None))
-                            .collect(),
-                    )
+                    client.join(r.iter().zip(iter::repeat(None)).collect())
                 }
                 Requests::JoinChannels::KeyedChannels(r) => {
                     let (chans, keys): (Vec<String>, Vec<String>) = r.into_iter().unzip();
-                    client.lock().unwrap().join(
-                        chans
-                            .iter()
-                            .zip(keys.iter().map(|k| Some(k)))
-                            .collect(),
-                    )
+                    client.join(chans.iter().zip(keys.iter().map(|k| Some(k))).collect())
                 }
             }
-            /*if keys.len() > 0 && channels.len() != keys.len() {
-                error_resp!( server_prefix,
-                    Command::ERR_NEEDMOREPARAMS(
-                        Responses::NEEDMOREPARAMS { command: "JOIN".to_string() },
-                    )
-                );
+        }
+
+        Command::MODE(Requests::Mode {
+                          target,
+                          mode_string,
+                          mode_args,
+                      }) => {
+            let mut client = client.lock().unwrap();
+            verify_registered!(client);
+            if &target != client.nick.as_ref().unwrap() {
+                error_resp!(Command::ERR_USERSDONTMATCH(Responses::UsersDontMatch {
+                    nick: client.nick.clone().unwrap(),
+                }));
             }
-
-            let mut channel_info = Vec::with_capacity(channels.len());
-            let client = client.lock().unwrap();
-            verify_registered!(server_prefix, client);
-
-            if channels.len() == 1 && channels[0] == "0" {
-                unimplemented!()
+            if mode_string.is_none() {
+                unimplemented!();
             }
+            let mode = mode_string.unwrap();
+            if mode.len() < 2 {
+                error_resp!(Command::ERR_UMODEUNKNOWNFLAG(Responses::UModeUnknownFlag {
+                    nick: client.nick.clone().unwrap(),
+                }));
+            }
+            let set = if mode.starts_with("+") {
+                super::SetMode::Add
+            } else if mode.starts_with("-") {
+                super::SetMode::Remove
+            } else {
+                error_resp!(Command::ERR_UMODEUNKNOWNFLAG(Responses::UModeUnknownFlag {
+                    nick: client.nick.clone().unwrap(),
+                }));
+            };
 
-            let mut server = client.server.lock().unwrap();
-            for (i, c) in channels.iter().enumerate() {
-                channel_info.push((c, server.join_channel(&client, c, keys.get(i))));
-            }*/
+            let m = mode.chars()
+                .nth(1)
+                .unwrap()
+                .to_string()
+                .parse::<super::UserMode>()
+                .map_err(|_| {
+                    error_resp!(Command::ERR_UMODEUNKNOWNFLAG(Responses::UModeUnknownFlag {
+                        nick: client.nick.clone().unwrap(),
+                    }))
+                })
+                .unwrap();
+            client.set_mode(&set, &vec![m]);
+            Vec::new()
+        }
 
-            /*channel_info
-                        .into_iter()
-                        .flat_map(|(channel, (topic, nicks))| {
-                            vec![
-                                Message {
-                                    prefix: server_prefix.clone(),
-                                    command: Command::JOIN(Requests::Join {
-                                        channels: vec![channel.clone()],
-                                        keys: Vec::new(),
-                                    }),
-                                },
-                                Message {
-                                }
-                            ]
-                        })
-                        .collect()*/
+        Command::PING(Requests::Ping { originator, target }) => {
+            if target.is_some() && target.unwrap() != configuration.hostname {
+                unimplemented!();
+            }
+            vec![
+                Message {
+                    prefix: None,
+                    command: Command::PONG(Requests::Pong {
+                        originator: configuration.hostname.clone(),
+                        target: None,
+                    }),
+                },
+            ]
         }
 
         u @ _ => {

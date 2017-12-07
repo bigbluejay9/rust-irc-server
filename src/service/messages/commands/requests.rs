@@ -28,7 +28,7 @@ pub struct Pass {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct User {
     pub username: String,
-    pub mode: u32,
+    pub mode: String,
     pub unused: String,
     pub realname: String,
 }
@@ -89,10 +89,8 @@ pub struct Part {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Mode {
     pub target: String,
-    // TODO(lazau): This needs to be fixed.
-    // https://tools.ietf.org/html/rfc2812#section-3.1.5
-    // https://tools.ietf.org/html/rfc2812#section-3.2.3
-    pub modespec: Option<String>,
+    pub mode_string: Option<String>,
+    pub mode_args: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -549,8 +547,11 @@ impl fmt::Display for Ping {
 
 impl fmt::Display for Pong {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "PONG");
-        unimplemented!()
+        write!(f, "PONG {}", self.originator)?;
+        if self.target.is_some() {
+            write!(f, " :{}", self.target.as_ref().unwrap())?;
+        }
+        Ok(())
     }
 }
 

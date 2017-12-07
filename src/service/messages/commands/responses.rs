@@ -131,10 +131,14 @@ pub struct CANTKILLSERVER {}
 pub struct NOOPERHOST {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct UMODEUNKNOWNFLAG {}
+pub struct UModeUnknownFlag {
+    pub nick: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct USERSDONTMATCH {}
+pub struct UsersDontMatch {
+    pub nick: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct NONE {}
@@ -195,9 +199,9 @@ pub struct NOTOPIC {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct Topic {
-    nick: String,
-    channel: String,
-    topic: String,
+    pub nick: String,
+    pub channel: String,
+    pub topic: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
@@ -217,11 +221,11 @@ pub struct ENDOFWHO {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct NamReply {
-    nick: String,
-    symbol: String,
-    channel: String,
+    pub nick: String,
+    pub symbol: String,
+    pub channel: String,
     // (Prefix, Nick).
-    members: Vec<(String, String)>,
+    pub members: Vec<(String, String)>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
@@ -695,15 +699,15 @@ impl fmt::Display for NOOPERHOST {
     }
 }
 
-impl fmt::Display for UMODEUNKNOWNFLAG {
+impl fmt::Display for UModeUnknownFlag {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "501")
+        write!(f, "501 {} :Unknown MODE flag", self.nick)
     }
 }
 
-impl fmt::Display for USERSDONTMATCH {
+impl fmt::Display for UsersDontMatch {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "502")
+        write!(f, "502 {} :Cant change mode for other users", self.nick)
     }
 }
 

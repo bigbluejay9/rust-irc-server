@@ -37,9 +37,9 @@ pub struct Configuration {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct Channel {
-    name: String,
-    topic: String,
-    nicks: HashSet<String>,
+    pub name: String,
+    pub topic: String,
+    pub nicks: HashSet<String>,
 }
 
 impl std::hash::Hash for Channel {

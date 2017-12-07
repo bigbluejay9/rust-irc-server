@@ -20,8 +20,6 @@ pub enum ParseError {
     NoCommand,
     UnrecognizedCommand,
     NeedMoreParams { command: String },
-    NotARequest,
-    NotAResponse,
     Other { desc: String },
 }
 
@@ -76,21 +74,6 @@ impl str::FromStr for Message {
             command: command,
         })
     }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
-pub enum UserMode {
-    O,
-    P,
-    S,
-    I,
-    T,
-    N,
-    M,
-    L,
-    B,
-    V,
-    K,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize)]
