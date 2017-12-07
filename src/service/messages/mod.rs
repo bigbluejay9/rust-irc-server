@@ -137,7 +137,7 @@ mod test {
                 prefix: None,
                 command: Command::USER(Requests::User {
                     username: "d".to_string(),
-                    mode: 0,
+                    mode: "0".to_string(),
                     unused: "d".to_string(),
                     realname: "g".to_string(),
                 }),
