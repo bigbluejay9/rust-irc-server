@@ -1,5 +1,7 @@
 use std::{self, fmt, str};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use super::channel::Channel;
 
 // Stored in the server.
 #[derive(Debug, Serialize, Default, Clone, Hash, Eq)]
@@ -14,7 +16,7 @@ pub struct User {
     ident: Identifier,
 
     pub modes: HashSet<UserMode>,
-    pub channels: HashSet<String>,
+    pub channels: HashMap<String, Channel>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize)]
@@ -56,7 +58,7 @@ impl User {
                 realname,
             },
             modes: HashSet::new(),
-            channels: HashSet::new(),
+            channels: HashMap::new(),
         }
     }
 

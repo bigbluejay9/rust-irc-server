@@ -4,6 +4,7 @@ mod server;
 mod stats;
 mod templates;
 mod connection;
+mod channel;
 mod user;
 
 use chrono;

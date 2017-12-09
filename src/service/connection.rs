@@ -41,7 +41,7 @@ pub struct Connection {
     pub socket: SocketPair,
     conn_type: ConnectionType,
     server: Arc<Server>,
-    tx: Option<mpsc::Sender<Arc<Broadcast>>>,
+    tx: mpsc::Sender<Arc<Broadcast>>,
 }
 
 impl std::cmp::PartialEq for Connection {
@@ -76,27 +76,26 @@ impl Connection {
             socket: addr,
             conn_type: ConnectionType::default(),
             server: server,
-            tx: Some(tx),
+            tx: tx,
         }
     }
 
     fn try_register(&mut self) -> Vec<Message> {
         assert!(self.registered().is_none());
-        let ident;
-        if let ConnectionType::Registering(r) = self.conn_type {
+        let ident = if let ConnectionType::Registering(ref r) = self.conn_type {
             if r.nickname.is_none() || r.username.is_none() || r.realname.is_none() {
                 return Vec::new();
-            } else {
-                ident = &UserIdentifier {
-                    nickname: r.nickname.unwrap(),
-                    username: r.username.unwrap(),
-                    realname: r.realname.unwrap(),
-                };
             }
-        }
+            UserIdentifier {
+                nickname: r.nickname.as_ref().unwrap().clone(),
+                username: r.username.as_ref().unwrap().clone(),
+                realname: r.realname.as_ref().unwrap().clone(),
+            }
+        } else {
+            unreachable!()
+        };
 
-        let tx = self.tx.take().unwrap();
-        match self.server.add_user(ident, tx) {
+        match self.server.add_user(&ident, self.tx.clone()) {
             Ok(_) => {
                 self.conn_type = ConnectionType::Client(User::new(
                     ident.nickname.clone(),
@@ -155,7 +154,6 @@ impl Connection {
                 ];
             }
             Err(ServerError::NickInUse) => {
-                self.tx = Some(tx);
                 return_error_resp!(Command::ERR_NICKNAMEINUSE(
                     Responses::NICKNAMEINUSE { nick: ident.nickname.clone() },
                 ));
@@ -170,36 +168,36 @@ impl Connection {
         username: Option<String>,
         realname: Option<String>,
     ) {
-        let n;
-        let u;
-        let r;
+        let mut n;
+        let mut u;
+        let mut r;
         match self.conn_type {
             ConnectionType::Registering(Registration {
                                             ref nickname,
                                             ref username,
                                             ref realname,
                                         }) => {
-                n = nickname;
-                u = username;
-                r = realname;
+                n = nickname.clone();
+                u = username.clone();
+                r = realname.clone();
             }
             _ => unreachable!(),
         };
 
         if nickname.is_some() {
-            n = &nickname;
+            n = nickname;
         }
         if username.is_some() {
-            u = &username;
+            u = username;
         }
         if realname.is_some() {
-            r = &realname;
+            r = realname;
         }
 
         self.conn_type = ConnectionType::Registering(Registration {
-            nickname: n.clone(),
-            username: u.clone(),
-            realname: r.clone(),
+            nickname: n,
+            username: u,
+            realname: r,
         });
     }
 
@@ -207,6 +205,14 @@ impl Connection {
         match self.conn_type {
             ConnectionType::Registering(_) => None,
             ConnectionType::Client(ref u) => Some(u),
+            ConnectionType::Server => unimplemented!(),
+        }
+    }
+
+    fn registered_mut(&mut self) -> Option<&mut User> {
+        match self.conn_type {
+            ConnectionType::Registering(_) => None,
+            ConnectionType::Client(ref mut u) => Some(u),
             ConnectionType::Server => unimplemented!(),
         }
     }
@@ -223,9 +229,17 @@ impl Connection {
 
         macro_rules! verify_registered_and_return_user {
             () => {
-                if let Some(ref mut u) = self.registered() {
+                if let Some(u) = self.registered() {
                     u
                 } else {
+                    return_error_resp!(Command::ERR_NOTREGISTERED(Responses::NOTREGISTERED::default()));
+                }
+            }
+        }
+
+        macro_rules! verify_registered {
+            () => {
+                if self.registered().is_none() { 
                     return_error_resp!(Command::ERR_NOTREGISTERED(Responses::NOTREGISTERED::default()));
                 }
             }
@@ -235,7 +249,8 @@ impl Connection {
             Command::NICK(Requests::Nick { nickname: nick }) => {
                 // TODO(lazau): Validate nick based on
                 // https://tools.ietf.org/html/rfc2812#section-2.3.1.
-                if let Some(user) = self.registered() {
+                if self.registered().is_some() {
+                    let user = self.registered().unwrap();
                     let mut new_ident = user.identifier().clone();
                     new_ident.nickname = nick.clone();
                     match self.server.replace_nick(user.identifier(), &new_ident) {
@@ -260,9 +275,10 @@ impl Connection {
                               unused: _unused,
                               realname,
                           }) => {
-                if let Some(ref u) = self.registered() {
+                if self.registered().is_some() {
+                    let user = self.registered().unwrap();
                     return_error_resp!(Command::ERR_ALREADYREGISTRED(
-                        Responses::AlreadyRegistered { nick: u.nick().clone() },
+                        Responses::AlreadyRegistered { nick: user.nick().clone() },
                     ));
                 } else {
                     self.add_registration_info(None, Some(username), Some(realname));
@@ -271,9 +287,11 @@ impl Connection {
             }
 
             Command::JOIN(Requests::Join { join: jt }) => {
-                let mut user = verify_registered_and_return_user!();
+                //let mut user = verify_registered_and_return_user!();
+                verify_registered!();
                 match jt {
                     Requests::JoinChannels::PartAll => {
+                        let user = self.registered_mut().unwrap();
                         /*connection.server.lock().unwrap().part_all(
                                 user.identifier(),
                                 None,
