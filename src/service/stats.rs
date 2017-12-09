@@ -14,7 +14,7 @@ use tokio_core::reactor::Handle;
 use tokio_io::io::{lines, write_all};
 use tokio_io::AsyncRead;
 
-use super::client;
+use super::connection;
 use super::server;
 use super::templates;
 
@@ -89,10 +89,12 @@ struct DebugOutputData {
     // Nick -> HTML Element ID.
     nick_to_connections: HashMap<String, String>,
 
-    // SocketPair -> ((ID Valid, HTML Element ID), Client). There may be some clients without a Nick.
+    // SocketPair -> ((ID Valid, HTML Element ID), Connection). There may be some connections without a Nick.
     connections: HashMap<String, ((bool, String), String)>,
-}
 
+    // Channels to Nicks.
+    channels_to_nicks: HashMap<String, Vec<String>>,
+}
 
 fn serialize(
     configuration: Arc<server::Configuration>,
@@ -104,11 +106,12 @@ fn serialize(
 
     let mut heading_number = 0;
     let mut addr_to_heading = HashMap::new();
-    let mut connections_cloned: Vec<Arc<Mutex<client::Client>>> = Vec::new();
+    let mut connections_cloned: Vec<Arc<Mutex<connection::Connection>>> = Vec::new();
     let mut nick_to_connections_serialized = HashMap::new();
+    let mut channels_to_nicks_serialized = HashMap::new();
     {
         let server = server.lock().unwrap();
-        for (n, addr) in server.nick_to_client.iter() {
+        for (n, addr) in server.nick_to_connection.iter() {
             nick_to_connections_serialized.insert(n.clone(), heading_number.to_string());
             addr_to_heading.insert(addr.to_string(), heading_number);
             heading_number += 1;
@@ -117,20 +120,28 @@ fn serialize(
         for c in server.connections.values() {
             connections_cloned.push(Arc::clone(&c));
         }
+
+        for (name, chan) in server.channels.iter() {
+            let mut nicks = Vec::new();
+            for n in chan.nicks.iter() {
+                nicks.push(n.clone());
+            }
+            channels_to_nicks_serialized.insert(name.clone(), nicks);
+        }
     }
 
     let mut connections_serialized = HashMap::new();
     {
         for c in connections_cloned {
-            let client = c.lock().unwrap();
-            let heading_number = addr_to_heading.get(&client.socket.to_string());
-            connections_serialized.insert(client.socket.to_string(), (
+            let connection = c.lock().unwrap();
+            let heading_number = addr_to_heading.get(&connection.socket.to_string());
+            connections_serialized.insert(connection.socket.to_string(), (
                 match heading_number {
                     Some(s) => (true, s.to_string()),
                     None => (false, "".to_string()),
                 },
                 serde_yaml::to_string(
-                    client.deref(),
+                    connection.deref(),
                 ).map_err(|e| e.to_string())?,
             ));
         }
@@ -140,5 +151,6 @@ fn serialize(
         configuration: configuration_serialized,
         nick_to_connections: nick_to_connections_serialized,
         connections: connections_serialized,
+        channels_to_nicks: channels_to_nicks_serialized,
     })
 }

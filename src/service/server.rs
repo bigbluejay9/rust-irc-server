@@ -5,17 +5,21 @@ use hostname;
 use serde::ser;
 
 use std;
+use std::cell::{RefMut, RefCell};
 use std::collections::{HashSet, HashMap};
 use std::sync::{Arc, Mutex};
+use std::ops::DerefMut;
 
 use super::{templates, SocketPair, Broadcast};
-use super::client::Client;
+use super::connection::Connection;
+use super::user::Identifier as UserIdentifier;
 
 use futures::sync::mpsc;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ServerError {
     NickInUse,
+    UnknownUser,
     Other,
 }
 
@@ -33,40 +37,22 @@ pub struct Configuration {
     pub template_engine: handlebars::Handlebars,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Eq)]
 pub struct Channel {
     pub name: String,
-    pub topic: String,
-    pub nicks: HashSet<String>,
-}
-
-impl std::hash::Hash for Channel {
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: std::hash::Hasher,
-    {
-        self.name.hash(state)
-    }
+    pub topic: Option<String>,
+    pub users: HashSet<UserIdentifier>,
 }
 
 // Mutable data for the server.
 #[derive(Debug)]
 pub struct Server {
-    nicks: HashSet<String>,
-
     // Channel name -> Channel.
-    channels: HashMap<String, Channel>,
+    pub channels: HashMap<Channel>,
 
-    pub nick_to_client: HashMap<String, SocketPair>,
-    clients: HashMap<SocketPair, mpsc::Sender<Arc<Broadcast>>>,
-
-    // Only used for stats generation.
-    // Lock order:
-    // 1. Client.
-    // 2. Server.
-    // Do not lock the clients in this map while holding Server lock, rather copy the arcs into a
-    // different data structure and lock them once you've let go of the Server lock.
-    pub connections: HashMap<SocketPair, Arc<Mutex<Client>>>,
+    // All known users are stored here.
+    // User -> TX.
+    pub users: HashMap<UserIdentifier, RefCell<mpsc::Sender<Arc<Broadcast>>>>
 }
 
 pub fn chrono_datetime_serializer<S, X>(
@@ -115,87 +101,78 @@ impl Channel {
     pub fn new(name: &String) -> Self {
         Channel {
             name: name.clone(),
-            topic: "".to_string(),
+            topic: None,
             nicks: HashSet::new(),
         }
+    }
+    
+    // Should only be used for comparison.
+    pub fn from_string(name: &String) -> Self {
+        new(name)
+    }
+}
+
+impl std::cmp::PartialEq for Channel {
+    fn eq(&self, other: &Channel) -> bool {
+        self.name == other.name
+    }
+}
+
+impl std::hash::Hash for Channel {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        self.name.hash(state)
     }
 }
 
 impl Server {
     pub fn new() -> Self {
         Server {
-            nicks: HashSet::new(),
             channels: HashMap::new(),
-            nick_to_client: HashMap::new(),
-            clients: HashMap::new(),
-            connections: HashMap::new(),
+            users: HashMap::new(),
         }
     }
 
-    // Replaces old_nick with new_nick for client.
-    pub fn replace_nick(
+    // Replaces old_nick with new_nick for user.
+    pub fn replace_user(
         &mut self,
-        client: &Client,
-        new_nick: String,
-    ) -> Result<Option<String>, ServerError> {
+        old: &UserIdentifier,
+        new: &Option<UserIdentifier>,
+    ) -> Result<(), ServerError> {
         debug!(
             "Replacing nick [{:?}] with [{:?}] for {:?}.",
-            client.nick,
-            new_nick,
-            client
+            old,
+            new,
+            user
         );
-        if self.nicks.contains(&new_nick) {
+        if let Some(ref n) = new && self.users.contains(n) {
             return Err(ServerError::NickInUse);
         }
+        let tx = self.users.remove(&old).unwrap();
 
-        let old_nick_clone = client.nick.clone();
-        if let Some(ref old) = client.nick {
-            self.nicks.remove(old);
-            assert_eq!(self.nick_to_client.remove(old).unwrap(), client.socket);
+        if let Some(ref n) = new {
+            self.users.insert(new, tx);
+        } else {
+            debug!("Dropping user: {:?}.", old);
         }
-
-        self.nicks.insert(new_nick.clone());
-        self.nick_to_client.insert(
-            new_nick.clone(),
-            client.socket.clone(),
-        );
-        Ok(old_nick_clone)
-    }
-
-    pub fn insert_client(
-        &mut self,
-        socket: &SocketPair,
-        client: Arc<Mutex<Client>>,
-        tx: mpsc::Sender<Arc<Broadcast>>,
-    ) {
-        assert!(self.clients.insert(socket.clone(), tx).is_none());
-        assert!(self.connections.insert(socket.clone(), client).is_none());
-    }
-
-    pub fn remove_client(&mut self, client: &Client) {
-        if let Some(ref nick) = client.nick {
-            assert!(self.nicks.remove(nick));
-            assert_eq!(&self.nick_to_client.remove(nick).unwrap(), &client.socket);
-        }
-        assert!(self.clients.remove(&client.socket).is_some());
-        assert!(self.connections.remove(&client.socket).is_some());
+        Ok(())
     }
 
     fn lookup_channel(&self, channel: &String) -> Option<&Channel> {
         self.channels.get(channel)
     }
 
-    fn lookup_nick(&mut self, nick: &String) -> Option<&mut mpsc::Sender<Arc<Broadcast>>> {
-        if let Some(ref sp) = self.nick_to_client.get(nick) {
-            if let Some(s) = self.clients.get_mut(sp) {
-                return Some(s);
-            }
+    fn user_to_tx(&self, user: &UserIdentifier) -> Option<RefMut<mpsc::Sender<Arc<Broadcast>>>> {
+        if let Some(s) = self.users.get(user) {
+            return Some(s.borrow_mut());
         }
         None
     }
 
-    fn try_send_broadcast(&mut self, nick: &String, message: Arc<Broadcast>) {
-        if let Some(ref mut s) = self.lookup_nick(nick) {
+    fn send_to_user(&self, user: &UserIdentifier, message: Arc<Broadcast>) {
+        if let Some(ref mut s) = self.user_to_tx(user) {
             if let Err(ref e) = s.try_send(message) {
                 if e.is_disconnected() {
                     error!("Trying to broadcast to dropped TX for {}.", nick);
@@ -208,43 +185,23 @@ impl Server {
         }
     }
 
-    pub fn join(
-        &mut self,
-        client: &Client,
-        channel: &String,
-        key: Option<&String>,
-    ) -> Result<&Channel, ServerError> {
-        if self.channels.contains_key(channel) {
-            let chan = self.channels.get(channel).unwrap();
-            let msg = Arc::new(Broadcast::Join(
-                client.user_prefix(),
-                client.nick.as_ref().unwrap().clone(),
-            ));
-            for n in chan.nicks.iter() {
-                //self.try_send_broadcast(n, Arc::clone(&msg));
-                unimplemented!()
-            }
-        // TODO(permission checks and all that).
-        } else {
-            let new_channel = Channel::new(channel);
-            assert!(self.channels.insert(channel.clone(), new_channel).is_none());
+    pub fn join(&mut self, user: &UserIdentifier, channel: &String, key: Option<&String>) {
+        let channel = Channel::from_string(channel);
+        if !self.channels.contains(&channel) {
+            self.channels.insert(channel.clone(), Channel::new(channel));
         }
-        Ok(self.channels.get(channel).unwrap())
+        // TODO(permission checks and all that).
+        let chan = self.channels.get(&channel).unwrap();
+        let msg = Arc::new(Broadcast::Join((
+        user.nick().clone(), chan.name.clone()
+        )));
+
+        for user in chan.users.iter() {
+            self.send_to_user(user, Arc::clone(&msg));
+        }
     }
 
     pub fn part(&mut self, channel: &String, message: &Option<String>) {
         //unimplemented!()
-    }
-
-    pub fn remove_client_from_channel(&mut self, channel: &String, client: &Client) {
-        assert!(
-            self.channels
-                .get_mut(channel)
-                .expect("trying to remove client from unknown channel")
-                .nicks
-                .remove(client.nick.as_ref().expect(
-                    "trying to remove a client from channel without a nickname",
-                ))
-        );
     }
 }

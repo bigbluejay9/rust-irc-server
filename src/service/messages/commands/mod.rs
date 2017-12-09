@@ -99,7 +99,7 @@ pub enum Command {
     ERR_USERSDISABLED(responses::USERSDISABLED),
     ERR_NOTREGISTERED(responses::NOTREGISTERED),
     ERR_NEEDMOREPARAMS(responses::NeedMoreParams),
-    ERR_ALREADYREGISTRED(responses::ALREADYREGISTRED),
+    ERR_ALREADYREGISTRED(responses::AlreadyRegistered),
     ERR_NOPERMFORHOST(responses::NOPERMFORHOST),
     ERR_PASSWDMISMATCH(responses::PASSWDMISMATCH),
     ERR_YOUREBANNEDCREEP(responses::YOUREBANNEDCREEP),
@@ -957,7 +957,7 @@ impl str::FromStr for Command {
                 responses::NeedMoreParams::default(),
             )),
             "462" => Ok(Command::ERR_ALREADYREGISTRED(
-                responses::ALREADYREGISTRED::default(),
+                responses::AlreadyRegistered::default(),
             )),
             "463" => Ok(Command::ERR_NOPERMFORHOST(
                 responses::NOPERMFORHOST::default(),

@@ -7,10 +7,36 @@ pub static DEBUG_HTML_TEMPLATE: &'static str = "
   <title>IRC Server State</title>
 </head>
 <body>
+
+<div id=\"Server\">
 <h2>Server</h2>
 <pre>
 {{configuration}}
 </pre>
+</div>
+
+<div id=\"Channels\">
+<table>
+  <tr>
+    <th>Channel Name</th>
+    <th>Members</th>
+  </tr>
+  {{#each channels_to_nicks}}
+  <tr>
+    <td>{{@key}}</td>
+    <td>
+      <ul>
+        {{#each this}}
+        <li>{{this}}</li>
+        {{/each}}
+      </ul>
+    </td>
+  </tr>
+  {{/each}}
+</table>
+</div>
+
+<div id=\"Nicks\">
 <table>
   <tr>
     <th>Known Nicks</th>
@@ -21,6 +47,9 @@ pub static DEBUG_HTML_TEMPLATE: &'static str = "
   </tr>
   {{/each}}
 </table>
+</div>
+
+<div id=\"Connections\">
 <table>
   <tr>
     <th>Socket Pair</th>
@@ -37,6 +66,7 @@ pub static DEBUG_HTML_TEMPLATE: &'static str = "
   </tr>
 {{/each}}
 </table>
+</div>
 
 </body>
 </html>";

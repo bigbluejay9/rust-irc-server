@@ -3,7 +3,8 @@ mod messages;
 mod server;
 mod stats;
 mod templates;
-mod client;
+mod connection;
+mod user;
 
 use chrono;
 
@@ -20,7 +21,7 @@ use tokio_core::net::TcpListener;
 use tokio_core::reactor::Core;
 use tokio_io::AsyncRead;
 
-// Used to identify clients.
+// Used to identify connections.
 // Server is represented by (local, local) pair.
 #[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
 pub struct SocketPair {
@@ -36,14 +37,15 @@ impl fmt::Display for SocketPair {
 
 // A union of socket events and server-wide events.
 #[derive(Debug)]
-enum ClientEvent {
+enum ConnectionEvent {
     Socket(String),
     Broadcast(Arc<Broadcast>),
 }
 
 #[derive(Debug)]
 pub enum Broadcast {
-    Join(client::UserPrefix, String),
+    // (Nick, Channel).
+    Join(String, String),
     Part,
     PrivateMessage,
 }
@@ -71,39 +73,40 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
     let srv = lis.incoming().for_each(|(stream, addr)| {
         let configuration = Arc::clone(&configuration);
         let server = Arc::clone(&server);
-        // Create client connection.
+        // Create connection connection.
         handle.spawn(thread_pool.spawn_fn(move || {
             let socket = SocketPair {
                 local: local_addr,
                 remote: addr,
             };
-            let client = Arc::new(Mutex::new(
-                client::Client::new(socket.clone(), Arc::clone(&server)),
-            ));
+            let connection = Arc::new(Mutex::new(connection::Connection::new(
+                socket.clone(),
+                Arc::clone(&server),
+            )));
 
             // TODO(lazau): How large should this buffer be?
-            // Note: should penalize slow clients.
+            // Note: should penalize slow connections.
             let (tx, rx) = mpsc::channel(5);
-            server.lock().unwrap().insert_client(
+            server.lock().unwrap().insert_connection(
                 &socket,
-                Arc::clone(&client),
+                Arc::clone(&connection),
                 tx,
             );
 
             // Refcount for handle future.
-            let client_handle = Arc::clone(&client);
+            let connection_handle = Arc::clone(&connection);
             // Refcount for cleanup future.
-            let client_cleanup = Arc::clone(&client);
+            let connection_cleanup = Arc::clone(&connection);
             // Refcount for serialization future.
             let configuration_serialization = Arc::clone(&configuration);
 
             let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
             stream
-                .map(|s| ClientEvent::Socket(s))
+                .map(|s| ConnectionEvent::Socket(s))
                 .select(rx.then(|e| {
-                    Ok(ClientEvent::Broadcast(
-                        e.expect("client channel rx error. should never happen."),
-                    ))
+                    Ok(ConnectionEvent::Broadcast(e.expect(
+                        "connection channel rx error. should never happen.",
+                    )))
                 }))
                 .then(move |event| {
                     // ** Process future.
@@ -115,7 +118,7 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                     }
 
                     let res = match event.unwrap() {
-                        ClientEvent::Socket(s) => {
+                        ConnectionEvent::Socket(s) => {
                             let message = match s.parse::<messages::Message>() {
                                 Ok(m) => m,
                                 // TODO(lazau): Maybe do some additional error processing here?
@@ -125,18 +128,18 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                                 }
                             };
                             debug!("Request [{:?}].", message);
-                            client::process_message(
+                            connection::process_message(
                                 Arc::clone(&configuration),
-                                Arc::clone(&client_handle),
+                                Arc::clone(&connection_handle),
                                 message,
                             )
                         }
 
-                        ClientEvent::Broadcast(b) => {
+                        ConnectionEvent::Broadcast(b) => {
                             debug!("Broadcast [{:?}].", b);
-                            client::process_broadcast(
+                            connection::process_broadcast(
                                 Arc::clone(&configuration),
-                                Arc::clone(&client_handle),
+                                Arc::clone(&connection_handle),
                                 b,
                             )
                         }
@@ -163,8 +166,10 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                 .forward(sink)
                 .then(move |e: Result<(_, _), io::Error>| {
                     // ** Cleanup future.
-                    let client = client_cleanup.lock().unwrap();
-                    client.server.lock().unwrap().remove_client(&client);
+                    let connection = connection_cleanup.lock().unwrap();
+                    connection.server.lock().unwrap().remove_connection(
+                        &connection,
+                    );
                     if let Err(e) = e {
                         warn!("Connection error: {:?}.", e);
                     }

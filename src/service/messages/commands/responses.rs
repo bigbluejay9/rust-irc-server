@@ -89,7 +89,9 @@ pub struct NeedMoreParams {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct ALREADYREGISTRED {}
+pub struct AlreadyRegistered {
+    pub nick: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct NOPERMFORHOST {}
@@ -615,9 +617,9 @@ impl fmt::Display for NeedMoreParams {
     }
 }
 
-impl fmt::Display for ALREADYREGISTRED {
+impl fmt::Display for AlreadyRegistered {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "462")
+        write!(f, "462 {} :You may not reregister", self.nick)
     }
 }
 
