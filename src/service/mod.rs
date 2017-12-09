@@ -9,6 +9,7 @@ mod user;
 use chrono;
 
 use std::{io, fmt};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 
@@ -44,9 +45,10 @@ enum ConnectionEvent {
 
 #[derive(Debug)]
 pub enum Broadcast {
-    // (Nick, Channel).
-    Join(String, String),
-    Part,
+    // (User, Channel).
+    Join(user::Identifier, String),
+    // (User, Channel, Message)
+    Part(user::Identifier, String, Option<String>),
     PrivateMessage,
 }
 
@@ -62,41 +64,45 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
         "0.1".to_string(),
     ));
     let server = Arc::new(Mutex::new(server::Server::new()));
+    let connections = Arc::new(Mutex::new(HashMap::new()));
 
     stats::start_stats_server(
         http,
         &handle,
         Arc::clone(&configuration),
         Arc::clone(&server),
+        Arc::clone(&connections),
     );
 
     let srv = lis.incoming().for_each(|(stream, addr)| {
         let configuration = Arc::clone(&configuration);
         let server = Arc::clone(&server);
+        let connections = Arc::clone(&connections);
         // Create connection connection.
         handle.spawn(thread_pool.spawn_fn(move || {
             let socket = SocketPair {
                 local: local_addr,
                 remote: addr,
             };
-            let connection = Arc::new(Mutex::new(connection::Connection::new(
-                socket.clone(),
-                Arc::clone(&server),
-            )));
 
             // TODO(lazau): How large should this buffer be?
             // Note: should penalize slow connections.
-            let (tx, rx) = mpsc::channel(5);
-            server.lock().unwrap().insert_connection(
-                &socket,
-                Arc::clone(&connection),
+            let (tx, rx) = mpsc::channel(20);
+            let connection = Arc::new(Mutex::new(connection::Connection::new(
+                socket.clone(),
                 tx,
+                Arc::clone(&server),
+            )));
+            connections.lock().unwrap().insert(
+                socket.clone(),
+                Arc::clone(&connection),
             );
 
             // Refcount for handle future.
             let connection_handle = Arc::clone(&connection);
             // Refcount for cleanup future.
             let connection_cleanup = Arc::clone(&connection);
+            let connections_cleanup = Arc::clone(&connections);
             // Refcount for serialization future.
             let configuration_serialization = Arc::clone(&configuration);
 
@@ -166,10 +172,9 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                 .forward(sink)
                 .then(move |e: Result<(_, _), io::Error>| {
                     // ** Cleanup future.
-                    let connection = connection_cleanup.lock().unwrap();
-                    connection.server.lock().unwrap().remove_connection(
-                        &connection,
-                    );
+                    let mut connection = connection_cleanup.lock().unwrap();
+                    connection.disconnect();
+                    connections.lock().unwrap().remove(&connection.socket);
                     if let Err(e) = e {
                         warn!("Connection error: {:?}.", e);
                     }

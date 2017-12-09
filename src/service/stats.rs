@@ -23,6 +23,7 @@ pub fn start_stats_server(
     reactor: &Handle,
     configuration: Arc<server::Configuration>,
     server: Arc<Mutex<server::Server>>,
+    connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
 ) {
     if http.is_none() {
         return;
@@ -38,6 +39,7 @@ pub fn start_stats_server(
             trace!("Accepted HTTP connection from {:?}.", addr);
             let configuration = Arc::clone(&configuration);
             let server = Arc::clone(&server);
+            let connections = Arc::clone(&connections);
             // TODO(lazau): For now we don't offload this to a worker thread. May want to.
             cloned_reactor.spawn_fn(move || {
                 let (reader, writer) = stream.split();
@@ -48,7 +50,7 @@ pub fn start_stats_server(
                     .and_then(move |line| {
                         trace!("Received HTTP request: {:?}.", line);
                         let mut output = DEBUG_HTTP_RESP.to_string();
-                        output.push_str(&render(configuration, server));
+                        output.push_str(&render(configuration, server, connections));
                         trace!("Got output data: {:?}.", output);
                         write_all(writer, output.into_bytes())
                     })
@@ -63,8 +65,12 @@ pub fn start_stats_server(
 
 static DEBUG_HTTP_RESP: &'static str = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
 
-fn render(configuration: Arc<server::Configuration>, server: Arc<Mutex<server::Server>>) -> String {
-    let maybe_serialized = serialize(Arc::clone(&configuration), server);
+fn render(
+    configuration: Arc<server::Configuration>,
+    server: Arc<Mutex<server::Server>>,
+    connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
+) -> String {
+    let maybe_serialized = serialize(Arc::clone(&configuration), server, connections);
     if let Err(e) = maybe_serialized {
         return format!("Cannot serialize server data for rendering: {}", e);
     }
@@ -87,70 +93,96 @@ struct DebugOutputData {
     configuration: String,
 
     // Nick -> HTML Element ID.
-    nick_to_connections: HashMap<String, String>,
+    nick_to_id: HashMap<String, String>,
 
-    // SocketPair -> ((ID Valid, HTML Element ID), Connection). There may be some connections without a Nick.
-    connections: HashMap<String, ((bool, String), String)>,
+    // Channel -> HTML Element ID.
+    channel_to_id: HashMap<String, String>,
 
-    // Channels to Nicks.
+    // SocketPair -> ((Registered, HTML Element ID), Nick). There may be some connections without a Nick.
+    connections: HashMap<String, (bool, String, String)>,
+
+    // Channels to Users.
     channels_to_nicks: HashMap<String, Vec<String>>,
+
+    // Nick -> User
+    nicks_to_users: HashMap<String, String>,
 }
 
 fn serialize(
     configuration: Arc<server::Configuration>,
     server: Arc<Mutex<server::Server>>,
+    connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
 ) -> Result<DebugOutputData, String> {
     let configuration_serialized = serde_yaml::to_string(configuration.deref()).map_err(|e| {
         e.to_string()
     })?;
 
-    let mut heading_number = 0;
-    let mut addr_to_heading = HashMap::new();
-    let mut connections_cloned: Vec<Arc<Mutex<connection::Connection>>> = Vec::new();
-    let mut nick_to_connections_serialized = HashMap::new();
-    let mut channels_to_nicks_serialized = HashMap::new();
+    let mut nick_id_counter = 0;
+    let mut channel_id_counter = 0;
+    let mut nick_to_id = HashMap::new();
+    let mut channel_to_id = HashMap::new();
+    let mut channels_to_nicks = HashMap::new();
+    let mut connections_output = HashMap::new();
+    let mut nicks_to_users = HashMap::new();
     {
         let server = server.lock().unwrap();
-        for (n, addr) in server.nick_to_connection.iter() {
-            nick_to_connections_serialized.insert(n.clone(), heading_number.to_string());
-            addr_to_heading.insert(addr.to_string(), heading_number);
-            heading_number += 1;
+        // Assign HTML element IDs to every nicknames.
+        for user in server.users.keys() {
+            nick_to_id.insert(
+                user.nickname.clone(),
+                format!("nick_{}", nick_id_counter.to_string()),
+            );
+            nick_id_counter += 1;
         }
 
-        for c in server.connections.values() {
-            connections_cloned.push(Arc::clone(&c));
-        }
-
+        // Assign HTML element IDs to every channels.
+        // Build channel -> Vec<Nick>.
         for (name, chan) in server.channels.iter() {
+            channel_to_id.insert(
+                name.clone(),
+                format!("channel_{}", channel_id_counter.to_string()),
+            );
+            channel_id_counter += 1;
+
             let mut nicks = Vec::new();
-            for n in chan.nicks.iter() {
-                nicks.push(n.clone());
+            for user in chan.users.keys() {
+                nicks.push(user.nickname.clone());
             }
-            channels_to_nicks_serialized.insert(name.clone(), nicks);
+            channels_to_nicks.insert(name.clone(), nicks);
         }
     }
 
-    let mut connections_serialized = HashMap::new();
     {
-        for c in connections_cloned {
-            let connection = c.lock().unwrap();
-            let heading_number = addr_to_heading.get(&connection.socket.to_string());
-            connections_serialized.insert(connection.socket.to_string(), (
-                match heading_number {
-                    Some(s) => (true, s.to_string()),
-                    None => (false, "".to_string()),
-                },
-                serde_yaml::to_string(
-                    connection.deref(),
-                ).map_err(|e| e.to_string())?,
-            ));
+        let conns = connections.lock().unwrap();
+        for (socket, conn) in conns.iter() {
+            let conn = conn.lock().unwrap();
+            if let Some(u) = conn.registered() {
+                let nick = u.nick();
+                connections_output.insert(socket.to_string(), (
+                    true,
+                    nick_to_id.get(nick).unwrap().clone(),
+                    nick.clone(),
+                ));
+                nicks_to_users.insert(
+                    nick.clone(),
+                    serde_yaml::to_string(u).map_err(|e| e.to_string())?,
+                );
+            } else {
+                connections_output.insert(socket.to_string(), (
+                    false,
+                    "".to_string(),
+                    "".to_string(),
+                ));
+            }
         }
     }
 
     Ok(DebugOutputData {
         configuration: configuration_serialized,
-        nick_to_connections: nick_to_connections_serialized,
-        connections: connections_serialized,
-        channels_to_nicks: channels_to_nicks_serialized,
+        nick_to_id: nick_to_id,
+        channel_to_id: channel_to_id,
+        connections: connections_output,
+        channels_to_nicks: channels_to_nicks,
+        nicks_to_users: nicks_to_users,
     })
 }

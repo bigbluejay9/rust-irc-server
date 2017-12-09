@@ -1,11 +1,12 @@
 use std::{self, fmt, str};
+use std::collections::HashSet;
 
 // Stored in the server.
-#[derive(Debug, Serialize, Default, Clone, Hash)]
+#[derive(Debug, Serialize, Default, Clone, Hash, Eq)]
 pub struct Identifier {
-    nickname: String,
-    username: String,
-    realname: String,
+    pub nickname: String,
+    pub username: String,
+    pub realname: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -29,73 +30,42 @@ pub enum UserMode {
 
 impl fmt::Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "{}", self.nick)?;
-        if let (Some(ref u), Some(ref h)) = (self.username, self.hostname)  {
-            write!(f, "!{}@{}", u, h)?;
-        }
-        Ok(())
+        write!(f, "{}", self.nickname)
     }
 }
 
 impl std::cmp::PartialEq for Identifier {
     fn eq(&self, other: &Identifier) -> bool {
-        self.nickname.len() > 0 && self.nickname == other.nickname
-    }
-}
-
-impl Identifier {
-    pub fn nick(&self) -> &String {
-        self.nickname.as_ref().unwrap()
+        assert!(self.nickname.len() > 0);
+        self.nickname == other.nickname
     }
 }
 
 impl std::cmp::PartialEq for User {
     fn eq(&self, other: &User) -> bool {
-        self.ident == other.iden
+        self.ident == other.ident
     }
 }
 
 impl User {
     pub fn new(nickname: String, username: String, realname: String) -> Self {
         User {
-            ident: Identifier { nickname, username, realname },
+            ident: Identifier {
+                nickname,
+                username,
+                realname,
+            },
             modes: HashSet::new(),
             channels: HashSet::new(),
         }
     }
 
-    pub fn identifier(&self) -> Identifier {
-        self.ident.clone()
+    pub fn identifier(&self) -> &Identifier {
+        &self.ident
     }
 
-    // Returns Vec<(Channel name, Topic, Vec<Nicks>)>.
-    pub fn join(&mut self, channels: Vec<(&String, Option<&String>)>) {
-        let mut server = self.server.lock().unwrap();
-        for &(c, key) in channels.iter() {
-            if self.channels.contains(c) {
-                warn!(
-                    "{} trying to join the same channel {}.",
-                    self.nick.as_ref().unwrap(),
-                    c
-                );
-            }
-            server.join(&self, c, key);
-        }
-    }
-
-    pub fn part(&mut self, channels: &Vec<String>, message: &Option<String>) {
-        let mut server = self.server.lock().unwrap();
-        for c in channels {
-            if !self.channels.remove(c) {
-                warn!("Failed to part {:?}.", c);
-                continue;
-            }
-            server.part(c, &message);
-        }
-    }
-
-    pub fn part_all(&mut self, message: &Option<String>) {
-        self.part(self.channels.iter().cloned().collect(), message);
+    pub fn nick(&self) -> &String {
+        &self.ident.nickname
     }
 
     pub fn set_mode(&mut self, set: &SetMode, mode: &Vec<UserMode>) {
