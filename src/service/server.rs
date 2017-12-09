@@ -4,10 +4,9 @@ use hostname;
 
 use serde::ser::{self, SerializeSeq};
 
-use std;
-use std::cell::RefCell;
+use std::fmt;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use super::{templates, Broadcast};
 use super::user::Identifier as UserIdentifier;
@@ -21,10 +20,8 @@ pub enum ServerError {
     Other,
 }
 
-// Immutable data for the server.
 #[derive(Serialize)]
-pub struct Configuration {
-    // Really this is the static part of the server, a.k.a. static config.
+pub struct Server {
     #[serde(serialize_with = "chrono_datetime_serializer")]
     pub created: chrono::DateTime<chrono::Utc>,
     pub version: String,
@@ -33,9 +30,38 @@ pub struct Configuration {
 
     #[serde(skip)]
     pub template_engine: handlebars::Handlebars,
+
+    #[serde(skip)]
+    // All known users are stored here.
+    users: RwLock<HashMap<UserIdentifier, mpsc::Sender<Arc<Broadcast>>>>,
 }
 
-#[derive(Debug, Serialize)]
+impl fmt::Debug for Server {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "created: {:?} version: {:?} hostname: {:?}, network_name: {:?} users: {:?}",
+            self.created,
+            self.version,
+            self.hostname,
+            self.network_name,
+            self.users
+        )
+    }
+}
+
+pub fn chrono_datetime_serializer<S, X>(
+    t: &chrono::DateTime<X>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: ser::Serializer,
+    X: chrono::TimeZone,
+{
+    serializer.serialize_str(&format!("{:?}", t))
+}
+
+/*#[derive(Debug, Serialize)]
 pub struct Channel {
     pub name: String,
     pub topic: Option<String>,
@@ -56,59 +82,6 @@ where
         s.serialize_element(&u.nickname)?;
     }
     s.end()
-}
-
-// Mutable data for the server.
-#[derive(Debug)]
-pub struct Server {
-    // Channel name -> Channel.
-    pub channels: HashMap<String, Channel>,
-
-    // All known users are stored here.
-    // User -> TX.
-    pub users: HashMap<UserIdentifier, RefCell<mpsc::Sender<Arc<Broadcast>>>>,
-}
-
-pub fn chrono_datetime_serializer<S, X>(
-    t: &chrono::DateTime<X>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: ser::Serializer,
-    X: chrono::TimeZone,
-{
-    serializer.serialize_str(&format!("{:?}", t))
-}
-
-impl Configuration {
-    pub fn new(time: chrono::DateTime<chrono::Utc>, version: String) -> Self {
-        let mut template_engine = handlebars::Handlebars::new();
-        macro_rules! register_template {
-            ($name:ident, $template:ident) => {
-                template_engine.register_template_string(templates::$name, templates::$template).unwrap();
-            }
-        }
-        // Register all known templates.
-        register_template!(DEBUG_TEMPLATE_NAME, DEBUG_HTML_TEMPLATE);
-        register_template!(RPL_WELCOME_TEMPLATE_NAME, RPL_WELCOME_TEMPLATE);
-        register_template!(RPL_YOURHOST_TEMPLATE_NAME, RPL_YOURHOST_TEMPLATE);
-        register_template!(RPL_CREATED_TEMPLATE_NAME, RPL_CREATED_TEMPLATE);
-
-        /* For rapid template iteration (only bin restart required).
-        template_engine.register_template_file(
-                templates::DEBUG_TEMPLATE_NAME,
-                "./template",
-            ).unwrap();
-       */
-
-        Configuration {
-            created: time,
-            version: version,
-            hostname: hostname::get_hostname().expect("unable to get hostname"),
-            network_name: "IRC Network".to_string(),
-            template_engine: template_engine,
-        }
-    }
 }
 
 impl Channel {
@@ -146,10 +119,9 @@ impl std::hash::Hash for Channel {
     {
         self.name.hash(state)
     }
-}
+}*/
 
-
-macro_rules! send_to_user {
+/*macro_rules! send_to_user {
     ($user:expr, $tx:expr, $message:expr) => {
         if let Err(ref e) = $tx.borrow_mut().try_send($message) {
             if e.is_disconnected() {
@@ -159,69 +131,79 @@ macro_rules! send_to_user {
             }
         }
     };
-}
+}*/
 
 impl Server {
-    pub fn new() -> Self {
-        Server {
-            channels: HashMap::new(),
-            users: HashMap::new(),
+    pub fn new(time: chrono::DateTime<chrono::Utc>, version: String) -> Self {
+        let mut template_engine = handlebars::Handlebars::new();
+        macro_rules! register_template {
+            ($name:ident, $template:ident) => {
+                template_engine.register_template_string(templates::$name, templates::$template).unwrap();
+            }
+        }
+        // Register all known templates.
+        register_template!(DEBUG_TEMPLATE_NAME, DEBUG_HTML_TEMPLATE);
+        register_template!(RPL_WELCOME_TEMPLATE_NAME, RPL_WELCOME_TEMPLATE);
+        register_template!(RPL_YOURHOST_TEMPLATE_NAME, RPL_YOURHOST_TEMPLATE);
+        register_template!(RPL_CREATED_TEMPLATE_NAME, RPL_CREATED_TEMPLATE);
+
+        /* For rapid template iteration (only bin restart required).
+        template_engine.register_template_file(
+                templates::DEBUG_TEMPLATE_NAME,
+                "./template",
+            ).unwrap();
+       */
+
+        Self {
+            created: time,
+            version: version,
+            hostname: hostname::get_hostname().expect("unable to get hostname"),
+            network_name: "IRC Network".to_string(),
+            template_engine: template_engine,
+            users: RwLock::new(HashMap::new()),
         }
     }
 
     pub fn add_user(
-        &mut self,
+        &self,
         user: &UserIdentifier,
         tx: mpsc::Sender<Arc<Broadcast>>,
     ) -> Result<(), ServerError> {
-        if self.users.contains_key(user) {
+        let users = self.users.write().unwrap();
+        if users.contains_key(user) {
             return Err(ServerError::NickInUse);
         }
-        self.users.insert(user.clone(), RefCell::new(tx));
+        users.insert(user.clone(), tx);
         Ok(())
     }
 
+    pub fn remove_user(&self, user: &UserIdentifier) -> Result<(), ServerError> {
+        match self.users.write().unwrap().remove(user) {
+            Some(_) => Ok(()),
+            None => Err(ServerError::UnknownUser),
+        }
+    }
+
     // Replaces old_nick with new_nick for user.
-    pub fn replace_user(
-        &mut self,
+    pub fn replace_nick(
+        &self,
         old: &UserIdentifier,
-        new: Option<&UserIdentifier>,
+        new: &UserIdentifier,
     ) -> Result<(), ServerError> {
         debug!(
             "Replacing nick [{:?}] with [{:?}].",
             old,
             new,
         );
-        if let Some(ref n) = new {
-            if self.users.contains_key(n) {
-                return Err(ServerError::NickInUse);
-            }
+        let users = self.users.write().unwrap();
+        if users.contains_key(new) {
+            return Err(ServerError::NickInUse);
         }
-        let tx = self.users.remove(&old).unwrap();
-
-        if let Some(n) = new {
-            self.users.insert(n.clone(), tx);
-        } else {
-            debug!("Dropping user: {:?}.", old);
-        }
+        users.insert(new.clone(), users.remove(old).unwrap());
         Ok(())
     }
 
-    /*fn send_to_user(&self, user: &UserIdentifier, message: Arc<Broadcast>) {
-        if let Some(ref mut s) = self.user_to_tx(user) {
-            if let Err(ref e) = s.try_send(message) {
-                if e.is_disconnected() {
-                    error!("Trying to broadcast to dropped TX for {:?}.", user);
-                } else if e.is_full() {
-                    error!("Trying to broadcast to full TX for {:?}.", user);
-                }
-            }
-        } else {
-            warn!("Can't broadcast {:?} to {:?}.", message, user);
-        }
-    }*/
-
-    pub fn join(&mut self, user: &UserIdentifier, channels: Vec<(&String, Option<&String>)>) {
+    /*pub fn join(&mut self, user: &UserIdentifier, channels: Vec<(&String, Option<&String>)>) {
         let tx = self.users.get(user).unwrap().clone();
         for &(channel_name, key) in channels.iter() {
             if !self.channels.contains_key(channel_name) {
@@ -302,5 +284,5 @@ impl Server {
 
     pub fn part_all(&mut self, user: &UserIdentifier, message: Option<&String>) {
         //unimplemented!()
-    }
+    }*/
 }

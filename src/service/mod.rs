@@ -58,24 +58,15 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
     let thread_pool = CpuPool::new_num_cpus();
     let lis = TcpListener::bind(&local_addr, &handle).unwrap();
 
-    // Immutable configuration.
-    let configuration = Arc::new(server::Configuration::new(
+    let server = Arc::new(server::Server::new(
         chrono::offset::Utc::now(),
         "0.1".to_string(),
     ));
-    let server = Arc::new(Mutex::new(server::Server::new()));
     let connections = Arc::new(Mutex::new(HashMap::new()));
 
-    stats::start_stats_server(
-        http,
-        &handle,
-        Arc::clone(&configuration),
-        Arc::clone(&server),
-        Arc::clone(&connections),
-    );
+    stats::start_stats_server(http, &handle, Arc::clone(&server), Arc::clone(&connections));
 
     let srv = lis.incoming().for_each(|(stream, addr)| {
-        let configuration = Arc::clone(&configuration);
         let server = Arc::clone(&server);
         let connections = Arc::clone(&connections);
         // Create connection connection.
@@ -90,8 +81,8 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
             let (tx, rx) = mpsc::channel(20);
             let connection = Arc::new(Mutex::new(connection::Connection::new(
                 socket.clone(),
-                tx,
                 Arc::clone(&server),
+                tx,
             )));
             connections.lock().unwrap().insert(
                 socket.clone(),
@@ -104,7 +95,7 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
             let connection_cleanup = Arc::clone(&connection);
             let connections_cleanup = Arc::clone(&connections);
             // Refcount for serialization future.
-            let configuration_serialization = Arc::clone(&configuration);
+            let server_serialization = Arc::clone(&server);
 
             let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
             stream
@@ -134,20 +125,12 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                                 }
                             };
                             debug!("Request [{:?}].", message);
-                            connection::process_message(
-                                Arc::clone(&configuration),
-                                Arc::clone(&connection_handle),
-                                message,
-                            )
+                            connection_handle.lock().unwrap().process_message(message)
                         }
 
                         ConnectionEvent::Broadcast(b) => {
                             debug!("Broadcast [{:?}].", b);
-                            connection::process_broadcast(
-                                Arc::clone(&configuration),
-                                Arc::clone(&connection_handle),
-                                b,
-                            )
+                            connection_handle.lock().unwrap().process_broadcast(b)
                         }
                     };
                     debug!("Response [{:?}].", res);
@@ -162,7 +145,7 @@ pub fn start(local_addr: SocketAddr, http: Option<SocketAddr>) {
                     // TODO(lazau): Perform 512 max line size here.
                     for mut m in messages.unwrap() {
                         if m.prefix.is_none() {
-                            m.prefix = Some(configuration_serialization.hostname.clone());
+                            m.prefix = Some(server_serialization.hostname.clone());
                         }
                         // TODO(lazau): Convert serialization error to future::err.
                         result.push(format!("{}", m));

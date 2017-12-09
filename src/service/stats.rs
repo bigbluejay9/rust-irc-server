@@ -21,8 +21,7 @@ use super::templates;
 pub fn start_stats_server(
     http: Option<SocketAddr>,
     reactor: &Handle,
-    configuration: Arc<server::Configuration>,
-    server: Arc<Mutex<server::Server>>,
+    server: Arc<server::Server>,
     connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
 ) {
     if http.is_none() {
@@ -37,7 +36,6 @@ pub fn start_stats_server(
     let srv = lis.incoming()
         .for_each(move |(stream, addr)| {
             trace!("Accepted HTTP connection from {:?}.", addr);
-            let configuration = Arc::clone(&configuration);
             let server = Arc::clone(&server);
             let connections = Arc::clone(&connections);
             // TODO(lazau): For now we don't offload this to a worker thread. May want to.
@@ -50,7 +48,7 @@ pub fn start_stats_server(
                     .and_then(move |line| {
                         trace!("Received HTTP request: {:?}.", line);
                         let mut output = DEBUG_HTTP_RESP.to_string();
-                        output.push_str(&render(configuration, server, connections));
+                        output.push_str(&render(server, connections));
                         trace!("Got output data: {:?}.", output);
                         write_all(writer, output.into_bytes())
                     })
@@ -66,11 +64,11 @@ pub fn start_stats_server(
 static DEBUG_HTTP_RESP: &'static str = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
 
 fn render(
-    configuration: Arc<server::Configuration>,
-    server: Arc<Mutex<server::Server>>,
+    server: Arc<server::Server>,
     connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
 ) -> String {
-    let maybe_serialized = serialize(Arc::clone(&configuration), server, connections);
+    unimplemented!()
+    /*let maybe_serialized = serialize(Arc::clone(&configuration), server, connections);
     if let Err(e) = maybe_serialized {
         return format!("Cannot serialize server data for rendering: {}", e);
     }
@@ -85,7 +83,7 @@ fn render(
             error!("Cannot render debug HTML template: {:?}.", e);
             "Failed to render debug template.".to_string()
         }
-    }
+    }*/
 }
 
 #[derive(Debug, Serialize)]
@@ -109,11 +107,11 @@ struct DebugOutputData {
 }
 
 fn serialize(
-    configuration: Arc<server::Configuration>,
-    server: Arc<Mutex<server::Server>>,
+    server: Arc<server::Server>,
     connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
 ) -> Result<DebugOutputData, String> {
-    let configuration_serialized = serde_yaml::to_string(configuration.deref()).map_err(|e| {
+    unimplemented!()
+    /*let configuration_serialized = serde_yaml::to_string(configuration.deref()).map_err(|e| {
         e.to_string()
     })?;
 
@@ -184,5 +182,5 @@ fn serialize(
         connections: connections_output,
         channels_to_nicks: channels_to_nicks,
         nicks_to_users: nicks_to_users,
-    })
+    })*/
 }
