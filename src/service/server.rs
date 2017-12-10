@@ -1,17 +1,21 @@
-use chrono;
-use handlebars;
-use hostname;
-
-use serde::ser::{self, SerializeSeq};
+use futures_cpupool::CpuPool;
 
 use std::fmt;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use super::{templates, Broadcast};
+use super::Broadcast;
+use super::channel::{Message as ChannelMessage, Identifier as ChannelIdentifier};
 use super::user::Identifier as UserIdentifier;
+use super::shared_state::SharedState;
 
 use futures::sync::mpsc;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Message {
+}
+
+pub type ServerTX = mpsc::Sender::Arc<Message>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ServerError {
@@ -20,74 +24,25 @@ pub enum ServerError {
     Other,
 }
 
-#[derive(Serialize)]
-pub struct Server {
-    #[serde(serialize_with = "chrono_datetime_serializer")]
-    pub created: chrono::DateTime<chrono::Utc>,
-    pub version: String,
-    pub hostname: String,
-    pub network_name: String,
+#[derive(Debug)]
+struct Server {
+    // All known users.
+    users: Mutex<HashMap<UserIdentifier, mpsc::Sender<Arc<Broadcast>>>>,
 
-    #[serde(skip)]
-    pub template_engine: handlebars::Handlebars,
+    // All known channels.
+    channels: Mutex<HashMap<ChannelIdentifier, mpsc::Sender<Arc<ChannelMessage>>>>,
 
-    #[serde(skip)]
-    // All known users are stored here.
-    users: RwLock<HashMap<UserIdentifier, mpsc::Sender<Arc<Broadcast>>>>,
+    thread_pool: CpuPool,
 }
 
-impl fmt::Debug for Server {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "created: {:?} version: {:?} hostname: {:?}, network_name: {:?} users: {:?}",
-            self.created,
-            self.version,
-            self.hostname,
-            self.network_name,
-            self.users
-        )
-    }
-}
+pub fn new(shared_state: Arc<SharedState>, thread_pool: CpuPool) -> ServerTX {}
 
-pub fn chrono_datetime_serializer<S, X>(
-    t: &chrono::DateTime<X>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: ser::Serializer,
-    X: chrono::TimeZone,
-{
-    serializer.serialize_str(&format!("{:?}", t))
-}
 impl Server {
-    pub fn new(time: chrono::DateTime<chrono::Utc>, version: String) -> Self {
-        let mut template_engine = handlebars::Handlebars::new();
-        macro_rules! register_template {
-            ($name:ident, $template:ident) => {
-                template_engine.register_template_string(templates::$name, templates::$template).unwrap();
-            }
-        }
-        // Register all known templates.
-        register_template!(DEBUG_TEMPLATE_NAME, DEBUG_HTML_TEMPLATE);
-        register_template!(RPL_WELCOME_TEMPLATE_NAME, RPL_WELCOME_TEMPLATE);
-        register_template!(RPL_YOURHOST_TEMPLATE_NAME, RPL_YOURHOST_TEMPLATE);
-        register_template!(RPL_CREATED_TEMPLATE_NAME, RPL_CREATED_TEMPLATE);
-
-        /* For rapid template iteration (only bin restart required).
-        template_engine.register_template_file(
-                templates::DEBUG_TEMPLATE_NAME,
-                "./template",
-            ).unwrap();
-       */
-
+    pub fn new(thread_pool: &CpuPool) -> Self {
         Self {
-            created: time,
-            version: version,
-            hostname: hostname::get_hostname().expect("unable to get hostname"),
-            network_name: "IRC Network".to_string(),
-            template_engine: template_engine,
-            users: RwLock::new(HashMap::new()),
+            users: Mutex::new(HashMap::new()),
+            channels: Mutex::new(HashMap::new()),
+            thread_pool: thread_pool.clone(),
         }
     }
 
@@ -96,7 +51,7 @@ impl Server {
         user: &UserIdentifier,
         tx: mpsc::Sender<Arc<Broadcast>>,
     ) -> Result<(), ServerError> {
-        let mut users = self.users.write().unwrap();
+        let mut users = self.users.lock().unwrap();
         if users.contains_key(user) {
             return Err(ServerError::NickInUse);
         }
@@ -105,7 +60,7 @@ impl Server {
     }
 
     pub fn remove_user(&self, user: &UserIdentifier) -> Result<(), ServerError> {
-        match self.users.write().unwrap().remove(user) {
+        match self.users.lock().unwrap().remove(user) {
             Some(_) => Ok(()),
             None => Err(ServerError::UnknownUser),
         }
@@ -122,13 +77,36 @@ impl Server {
             old,
             new,
         );
-        let mut users = self.users.write().unwrap();
+        let mut users = self.users.lock().unwrap();
         if users.contains_key(new) {
             return Err(ServerError::NickInUse);
         }
         let removed = users.remove(old).unwrap();
         users.insert(new.clone(), removed);
         Ok(())
+    }
+
+    pub fn lookup_channel(
+        &self,
+        channel: &ChannelIdentifier,
+    ) -> Result<mpsc::Sender<Arc<ChannelMessage>>, ServerError> {
+        debug!("Looking up channel: {:?}.", channel);
+        let mut channels = self.channels.lock().unwrap();
+        if channels.contains_key(channel) {
+            return Ok(channels.get(channel).unwrap().clone());
+        }
+
+        // Create new channel.
+        self.create_channel(channels, channel)
+    }
+
+    fn create_channel(
+        &self,
+        channels: MutexGuard<HashMap<ChannelIdentifier, mpsc::Sender<Arc<ChannelMessage>>>>,
+        channel: &ChannelIdentifier,
+    ) -> Result<mpsc::Sender<Arc<ChannelMessage>>, ServerError> {
+        unimplemented!()
+        //assert!(channels.insert(channel.clone
     }
 
     /*pub fn join(&mut self, user: &UserIdentifier, channels: Vec<(&String, Option<&String>)>) {

@@ -1,3 +1,4 @@
+use tokio_core;
 use futures::sync::mpsc;
 
 use std::{self, iter, str};
@@ -11,8 +12,9 @@ use super::messages::commands::Command;
 use super::messages::commands::requests as Requests;
 use super::messages::commands::responses as Responses;
 use super::server::{Server, ServerError};
-use super::templates;
 use super::user::{SetMode, User, UserMode, Identifier as UserIdentifier};
+
+use super::super::templates;
 
 #[derive(Debug)]
 enum ConnectionType {
@@ -69,6 +71,101 @@ prefix: None,
             ];
         };
     }
+
+pub fn handle_new_connection(stream: tokio_core::net::TcpStream, (local_addr, remote_addr):(std::net::SocketAddr, std::net::SocketAddr), server: Arc<Server>, connetions: Arc<Mutex<HashMap<SocketPair, Arc<Mutex<Connection>>) -> futures::future::Then<_, _, _> {
+                    let socket = SocketPair {
+                        local: local_addr,
+                        remote: addr,
+                    };
+
+                    // TODO(lazau): How large should this buffer be?
+                    // Note: should penalize slow connections.
+                    let (tx, rx) = mpsc::channel(20);
+                    let connection = Arc::new(Mutex::new(connection::Connection::new(
+                        socket.clone(),
+                        Arc::clone(&server),
+                        tx,
+                    )));
+                    connections.lock().unwrap().insert(
+                        socket.clone(),
+                        Arc::clone(&connection),
+                    );
+
+                    // Refcount for handle future.
+                    let connection_handle = Arc::clone(&connection);
+                    // Refcount for cleanup future.
+                    let connection_cleanup = Arc::clone(&connection);
+                    let connections_cleanup = Arc::clone(&connections);
+                    // Refcount for serialization future.
+                    let server_serialization = Arc::clone(&server);
+
+                    let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
+                    stream
+                    .map(|s| ConnectionEvent::Socket(s))
+                    .select(rx.then(|e| {
+                        Ok(ConnectionEvent::Broadcast(e.expect(
+                            "connection channel rx error. should never happen.",
+                        )))
+                    }))
+                    .then(move |event| {
+                        // ** Process future.
+                        trace!("Connection event: {:?}.", event);
+                        if event.is_err() {
+                            let err = event.err().unwrap();
+                            error!("Unexpected upstream error: {:?}.", err);
+                            return future::err(err);
+                        }
+
+                        let res = match event.unwrap() {
+                            ConnectionEvent::Socket(s) => {
+                                let message = match s.parse::<messages::Message>() {
+                                    Ok(m) => m,
+                                    // TODO(lazau): Maybe do some additional error processing here?
+                                    Err(e) => {
+                                        warn!("Failed to parse {}: {:?}.", s, e);
+                                        return future::ok(Vec::new());
+                                    }
+                                };
+                                debug!("Request [{:?}].", message);
+                                connection_handle.lock().unwrap().process_message(message)
+                            }
+
+                            ConnectionEvent::Broadcast(b) => {
+                                debug!("Broadcast [{:?}].", b);
+                                connection_handle.lock().unwrap().process_broadcast(b)
+                            }
+                        };
+                        debug!("Response [{:?}].", res);
+                        future::ok(res)
+                    })
+                    .then(move |messages: Result<Vec<messages::Message>, _>| {
+                        // ** Serialization future.
+                        if messages.is_err() {
+                            return future::err(messages.err().unwrap());
+                        }
+                        let mut result = Vec::new();
+                        // TODO(lazau): Perform 512 max line size here.
+                        for mut m in messages.unwrap() {
+                            if m.prefix.is_none() {
+                                m.prefix = Some(server_serialization.hostname.clone());
+                            }
+                            // TODO(lazau): Convert serialization error to future::err.
+                            result.push(format!("{}", m));
+                        }
+                        future::ok(result)
+                    })
+                    .forward(sink)
+                    .then(move |e: Result<(_, _), io::Error>| -> future::FutureResult<(), ()> {
+                        // ** Cleanup future.
+                        let mut connection = connection_cleanup.lock().unwrap();
+                        connection.disconnect();
+                        connections.lock().unwrap().remove(&connection.socket);
+                        if let Err(e) = e {
+                            warn!("Connection error: {:?}.", e);
+                        }
+                        future::ok(())
+                    })
+                }
 
 impl Connection {
     pub fn new(addr: SocketPair, server: Arc<Server>, tx: mpsc::Sender<Arc<Broadcast>>) -> Self {

@@ -1,21 +1,38 @@
+use futures::*;
 use futures::sync::mpsc;
+use futures_cpupool::CpuPool;
 
 use serde::ser::{self, SerializeSeq};
 
 use std;
 use std::collections::HashMap;
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::Broadcast;
 use super::user::Identifier as UserIdentifier;
 
+static CHANNEL_MPSC_LENGTH: usize = 20;
+
 #[derive(Debug, Serialize)]
-pub struct Channel {
+pub enum Message {
+    Join, // unimplemented
+}
+
+pub type ChannelTX = mpsc::Sender<Arc<Message>>;
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
+pub struct Identifier {
     pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+struct Channel {
+    ident: Identifier,
     pub topic: Option<String>,
     #[serde(serialize_with = "member_serializer")]
     pub users: HashMap<UserIdentifier, RefCell<mpsc::Sender<Arc<Broadcast>>>>,
+    key: Option<String>,
 }
 
 pub fn member_serializer<S>(
@@ -32,32 +49,17 @@ where
     s.end()
 }
 
-impl Channel {
-    pub fn new(name: &String) -> Self {
-        Channel {
-            name: name.clone(),
-            topic: None,
-            users: HashMap::new(),
-            key: None,
-        }
-    }
-
-    // Should only be used for comparison.
-    pub fn from_string(name: &String) -> Self {
-        Self::new(name)
-    }
-
-    pub fn verify_key(&self, key: Option<&String>) -> bool {
-        self.key.as_ref() == key
+impl Identifier {
+    pub fn from_name(name: &String) -> Self {
+        Self { name: name.clone() }
     }
 }
 
 impl std::cmp::PartialEq for Channel {
     fn eq(&self, other: &Channel) -> bool {
-        self.name == other.name
+        self.ident == other.ident
     }
 }
-
 impl std::cmp::Eq for Channel {}
 
 impl std::hash::Hash for Channel {
@@ -65,18 +67,37 @@ impl std::hash::Hash for Channel {
     where
         H: std::hash::Hasher,
     {
-        self.name.hash(state)
+        self.ident.hash(state)
     }
 }
 
-/*macro_rules! send_to_user {
-    ($user:expr, $tx:expr, $message:expr) => {
-        if let Err(ref e) = $tx.borrow_mut().try_send($message) {
-            if e.is_disconnected() {
-                error!("Trying to broadcast to dropped TX for {:?}.", $user);
-            } else if e.is_full() {
-                error!("Trying to broadcast to full TX for {:?}.", $user);
-            }
-        }
-    };
-}*/
+impl Channel {
+    pub fn new(name: &String, thread_pool: &CpuPool) -> mpsc::Sender<Arc<Message>> {
+        let (tx, rx) = mpsc::channel(CHANNEL_MPSC_LENGTH);
+        let chan = Arc::new(Mutex::new(Channel {
+            ident: Identifier { name: name.clone() },
+            topic: None,
+            users: HashMap::new(),
+            key: None,
+        }));
+
+        thread_pool
+            .spawn(
+                rx.and_then(move |message| {
+                    let chan = chan.lock().unwrap();
+                    debug!("Channel {} processing {:?}.", chan.name(), message);
+                    Ok(())
+                }).collect(),
+            )
+            .forget();
+        tx
+    }
+
+    fn name(&self) -> &String {
+        &self.ident.name
+    }
+
+    fn verify_key(&self, key: Option<&String>) -> bool {
+        self.key.as_ref() == key
+    }
+}

@@ -1,7 +1,7 @@
 use std::{self, fmt, str};
 use std::collections::{HashMap, HashSet};
 
-use super::channel::Channel;
+use super::channel::{Identifier as ChannelIdentifier, Message as ChannelMessage, ChannelTX};
 
 // Stored in the server.
 #[derive(Debug, Serialize, Default, Clone, Hash, Eq)]
@@ -16,7 +16,9 @@ pub struct User {
     ident: Identifier,
 
     pub modes: HashSet<UserMode>,
-    pub channels: HashMap<String, Channel>,
+
+    #[serde(skip)]
+    pub channels: HashMap<ChannelIdentifier, ChannelTX>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize)]
