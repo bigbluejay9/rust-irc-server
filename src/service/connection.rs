@@ -1,20 +1,27 @@
-use tokio_core;
+use futures::*;
 use futures::sync::mpsc;
-
-use std::{self, iter, str};
+use futures_cpupool::CpuPool;
+use std::{self, fmt, io};
 use std::clone::Clone;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
-
-use super::{SocketPair, Broadcast};
-use super::messages::Message;
-use super::messages::commands::Command;
-use super::messages::commands::requests as Requests;
-use super::messages::commands::responses as Responses;
-use super::server::{Server, ServerError};
-use super::user::{SetMode, User, UserMode, Identifier as UserIdentifier};
-
+use super::{codec, user};
+use super::messages::Message as IRCMessage;
+use super::messages::commands::{Command, requests as Requests, responses as Responses};
+use super::shared_state::SharedState;
+use super::server::{ServerTX, ServerError};
+use super::user::{User, Identifier as UserIdentifier};
 use super::super::templates;
+use tokio_core;
+use tokio_io::AsyncRead;
+
+// Used to identify connections.
+// Server is represented by (local, local) pair.
+#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
+pub struct SocketPair {
+    pub local: std::net::SocketAddr,
+    pub remote: std::net::SocketAddr,
+}
 
 #[derive(Debug)]
 enum ConnectionType {
@@ -24,10 +31,24 @@ enum ConnectionType {
     Server, // unimplemented.
 }
 
-impl std::default::Default for ConnectionType {
-    fn default() -> Self {
-        ConnectionType::Registering(Registration::default())
-    }
+#[derive(Debug)]
+pub enum Message {
+    // (User, Channel).
+    Join(user::Identifier, String),
+    // (User, Channel, Message)
+    Part(user::Identifier, String, Option<String>),
+    PrivateMessage,
+
+    ServerRegistrationResult(Option<ServerError>),
+}
+
+pub type ConnectionTX = mpsc::Sender<Arc<Message>>;
+
+// A union of socket events and messages to the connection.
+#[derive(Debug)]
+enum ConnectionEvent {
+    Socket(String),
+    Message(Arc<Message>),
 }
 
 #[derive(Debug, Default)]
@@ -40,10 +61,23 @@ struct Registration {
 #[derive(Debug)]
 pub struct Connection {
     // Unique per Connection.
-    pub socket: SocketPair,
+    socket: SocketPair,
+    shared_state: Arc<SharedState>,
     conn_type: ConnectionType,
-    server: Arc<Server>,
-    tx: mpsc::Sender<Arc<Broadcast>>,
+    server_tx: ServerTX,
+    tx: ConnectionTX,
+}
+
+impl fmt::Display for SocketPair {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "({} : {})", self.local, self.remote)
+    }
+}
+
+impl std::default::Default for ConnectionType {
+    fn default() -> Self {
+        ConnectionType::Registering(Registration::default())
+    }
 }
 
 impl std::cmp::PartialEq for Connection {
@@ -64,7 +98,7 @@ impl std::hash::Hash for Connection {
 macro_rules! return_error_resp {
         ($err:expr) => {
             return vec![
-                Message {
+                IRCMessage {
 prefix: None,
             command: $err,
                 },
@@ -72,112 +106,110 @@ prefix: None,
         };
     }
 
-pub fn handle_new_connection(stream: tokio_core::net::TcpStream, (local_addr, remote_addr):(std::net::SocketAddr, std::net::SocketAddr), server: Arc<Server>, connetions: Arc<Mutex<HashMap<SocketPair, Arc<Mutex<Connection>>) -> futures::future::Then<_, _, _> {
-                    let socket = SocketPair {
-                        local: local_addr,
-                        remote: addr,
+pub fn handle_new_connection(
+    stream: tokio_core::net::TcpStream,
+    shared_state: Arc<SharedState>,
+    server_tx: ServerTX,
+    thread_pool: CpuPool,
+) {
+    let socket = SocketPair {
+        local: stream.local_addr().unwrap(),
+        remote: stream.peer_addr().unwrap(),
+    };
+
+    let shared_state_serialization = Arc::clone(&shared_state);
+    // TODO(lazau): How large should this buffer be?
+    // Note: should penalize slow connections.
+    let (tx, rx) = mpsc::channel(shared_state.configuration.connection_message_queue_length);
+    let connection = Arc::new(Mutex::new(
+        Connection::new(socket, shared_state, server_tx, tx),
+    ));
+
+    let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
+    thread_pool
+        .spawn_fn(move || {
+            stream
+                .map(|s| ConnectionEvent::Socket(s))
+                .select(rx.then(|e| Ok(ConnectionEvent::Message(e.unwrap()))))
+                .then(move |event| {
+                    // ** Process future.
+                    trace!("Connection event: {:?}.", event);
+                    if event.is_err() {
+                        let err = event.err().unwrap();
+                        error!("Unexpected upstream error: {:?}.", err);
+                        return future::err(err);
+                    }
+
+                    let res = match event.unwrap() {
+                        ConnectionEvent::Socket(s) => {
+                            let message = match s.parse::<IRCMessage>() {
+                                Ok(m) => m,
+                                // TODO(lazau): Maybe do some additional error processing here?
+                                Err(e) => {
+                                    warn!("Failed to parse {}: {:?}.", s, e);
+                                    return future::ok(Vec::new());
+                                }
+                            };
+                            debug!("Request [{:?}].", message);
+                            connection.lock().unwrap().process_irc_message(message)
+                        }
+
+                        ConnectionEvent::Message(m) => {
+                            debug!("Message [{:?}].", m);
+                            connection.lock().unwrap().process_system_message(m)
+                        }
                     };
-
-                    // TODO(lazau): How large should this buffer be?
-                    // Note: should penalize slow connections.
-                    let (tx, rx) = mpsc::channel(20);
-                    let connection = Arc::new(Mutex::new(connection::Connection::new(
-                        socket.clone(),
-                        Arc::clone(&server),
-                        tx,
-                    )));
-                    connections.lock().unwrap().insert(
-                        socket.clone(),
-                        Arc::clone(&connection),
-                    );
-
-                    // Refcount for handle future.
-                    let connection_handle = Arc::clone(&connection);
-                    // Refcount for cleanup future.
-                    let connection_cleanup = Arc::clone(&connection);
-                    let connections_cleanup = Arc::clone(&connections);
-                    // Refcount for serialization future.
-                    let server_serialization = Arc::clone(&server);
-
-                    let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
-                    stream
-                    .map(|s| ConnectionEvent::Socket(s))
-                    .select(rx.then(|e| {
-                        Ok(ConnectionEvent::Broadcast(e.expect(
-                            "connection channel rx error. should never happen.",
-                        )))
-                    }))
-                    .then(move |event| {
-                        // ** Process future.
-                        trace!("Connection event: {:?}.", event);
-                        if event.is_err() {
-                            let err = event.err().unwrap();
-                            error!("Unexpected upstream error: {:?}.", err);
-                            return future::err(err);
+                    debug!("Response [{:?}].", res);
+                    future::ok(res)
+                })
+                .then(move |messages: Result<Vec<IRCMessage>, _>| {
+                    // ** Serialization future.
+                    if messages.is_err() {
+                        return future::err(messages.err().unwrap());
+                    }
+                    let mut result = Vec::new();
+                    // TODO(lazau): Perform 512 max line size here.
+                    for mut m in messages.unwrap() {
+                        if m.prefix.is_none() {
+                            m.prefix = Some(shared_state_serialization.hostname.clone());
                         }
-
-                        let res = match event.unwrap() {
-                            ConnectionEvent::Socket(s) => {
-                                let message = match s.parse::<messages::Message>() {
-                                    Ok(m) => m,
-                                    // TODO(lazau): Maybe do some additional error processing here?
-                                    Err(e) => {
-                                        warn!("Failed to parse {}: {:?}.", s, e);
-                                        return future::ok(Vec::new());
-                                    }
-                                };
-                                debug!("Request [{:?}].", message);
-                                connection_handle.lock().unwrap().process_message(message)
-                            }
-
-                            ConnectionEvent::Broadcast(b) => {
-                                debug!("Broadcast [{:?}].", b);
-                                connection_handle.lock().unwrap().process_broadcast(b)
-                            }
-                        };
-                        debug!("Response [{:?}].", res);
-                        future::ok(res)
-                    })
-                    .then(move |messages: Result<Vec<messages::Message>, _>| {
-                        // ** Serialization future.
-                        if messages.is_err() {
-                            return future::err(messages.err().unwrap());
-                        }
-                        let mut result = Vec::new();
-                        // TODO(lazau): Perform 512 max line size here.
-                        for mut m in messages.unwrap() {
-                            if m.prefix.is_none() {
-                                m.prefix = Some(server_serialization.hostname.clone());
-                            }
-                            // TODO(lazau): Convert serialization error to future::err.
-                            result.push(format!("{}", m));
-                        }
-                        future::ok(result)
-                    })
-                    .forward(sink)
-                    .then(move |e: Result<(_, _), io::Error>| -> future::FutureResult<(), ()> {
+                        // TODO(lazau): Convert serialization error to future::err.
+                        result.push(format!("{}", m));
+                    }
+                    future::ok(result)
+                })
+                .forward(sink)
+                .then(
+                    move |e: Result<(_, _), io::Error>| -> future::FutureResult<(), ()> {
                         // ** Cleanup future.
-                        let mut connection = connection_cleanup.lock().unwrap();
-                        connection.disconnect();
-                        connections.lock().unwrap().remove(&connection.socket);
                         if let Err(e) = e {
                             warn!("Connection error: {:?}.", e);
                         }
                         future::ok(())
-                    })
-                }
+                    },
+                    // Connection gets dropped.
+                )
+        })
+        .forget();
+}
 
 impl Connection {
-    pub fn new(addr: SocketPair, server: Arc<Server>, tx: mpsc::Sender<Arc<Broadcast>>) -> Self {
+    pub fn new(
+        addr: SocketPair,
+        shared_state: Arc<SharedState>,
+        server_tx: ServerTX,
+        tx: ConnectionTX,
+    ) -> Self {
         Connection {
             socket: addr,
             conn_type: ConnectionType::default(),
-            server: server,
+            shared_state: shared_state,
+            server_tx: server_tx,
             tx: tx,
         }
     }
 
-    fn try_register(&mut self) -> Vec<Message> {
+    fn try_register(&mut self) -> Vec<IRCMessage> {
         assert!(self.registered().is_none());
         let ident = if let ConnectionType::Registering(ref r) = self.conn_type {
             if r.nickname.is_none() || r.username.is_none() || r.realname.is_none() {
@@ -192,7 +224,8 @@ impl Connection {
             unreachable!()
         };
 
-        match self.server.add_user(&ident, self.tx.clone()) {
+        unimplemented!()
+        /*match self.server.add_user(&ident, self.tx.clone()) {
             Ok(_) => {
                 self.conn_type = ConnectionType::Client(User::new(
                     ident.nickname.clone(),
@@ -208,43 +241,52 @@ impl Connection {
                 }
 
                 return vec![
-                    Message {
+                    IRCMessage {
                         prefix: None,
                         command: Command::RPL_WELCOME(Responses::Welcome {
                             nick: nick.clone(),
-                            message: self.server
+                            message: self.shared_state
                                 .template_engine
+                                .0
                                 .render(
                                     templates::RPL_WELCOME_TEMPLATE_NAME,
                                     &WelcomeData {
-                                        network_name: &self.server.network_name,
+                                        network_name: &self.shared_state.configuration.network_name,
                                         nick: &nick,
                                     },
                                 )
                                 .unwrap(),
                         }),
                     },
-                    Message {
+                    IRCMessage {
                         prefix: None,
                         command: Command::RPL_YOURHOST(Responses::YourHost {
                             nick: nick.clone(),
-                            message: self.server
+                            message: self.shared_state
                                 .template_engine
-                                .render(templates::RPL_YOURHOST_TEMPLATE_NAME, self.server.deref())
+                                .0
+                                .render(
+                                    templates::RPL_YOURHOST_TEMPLATE_NAME,
+                                    self.shared_state.deref(),
+                                )
                                 .unwrap(),
                         }),
                     },
-                    Message {
+                    IRCMessage {
                         prefix: None,
                         command: Command::RPL_CREATED(Responses::Created {
                             nick: nick.clone(),
-                            message: self.server
+                            message: self.shared_state
                                 .template_engine
-                                .render(templates::RPL_CREATED_TEMPLATE_NAME, self.server.deref())
+                                .0
+                                .render(
+                                    templates::RPL_CREATED_TEMPLATE_NAME,
+                                    self.shared_state.deref(),
+                                )
                                 .unwrap(),
                         }),
                     },
-                    Message {
+                    IRCMessage {
                         prefix: None,
                         command: Command::RPL_MYINFO(Responses::MyInfo::default()),
                     },
@@ -256,7 +298,7 @@ impl Connection {
                 ));
             }
             _ => unreachable!(),
-        }
+        }*/
     }
 
     fn add_registration_info(
@@ -315,13 +357,11 @@ impl Connection {
     }
 
     pub fn disconnect(&mut self) {
-        if let Some(ref u) = self.registered() {
-            self.server.remove_user(u.identifier()).unwrap();
-        }
         //TODO(lazau): Maybe gotta part all channels?
+        unimplemented!()
     }
 
-    pub fn process_message(&mut self, req: Message) -> Vec<Message> {
+    pub fn process_irc_message(&mut self, req: IRCMessage) -> Vec<IRCMessage> {
         trace!("Connection state: {:?}.", self);
 
         macro_rules! verify_registered_and_return_user {
@@ -350,7 +390,8 @@ impl Connection {
                     let user = self.registered().unwrap();
                     let mut new_ident = user.identifier().clone();
                     new_ident.nickname = nick.clone();
-                    match self.server.replace_nick(user.identifier(), &new_ident) {
+                    unimplemented!()
+                /*match self.server.replace_nick(user.identifier(), &new_ident) {
                         Err(ServerError::NickInUse) => {
                             return_error_resp!(Command::ERR_NICKNAMEINUSE(
                                 Responses::NICKNAMEINUSE { nick: nick.clone() },
@@ -359,7 +400,7 @@ impl Connection {
                         // NICK change.
                         Ok(_) => unimplemented!(),
                         _ => unreachable!(),
-                    }
+                    }*/
                 } else {
                     self.add_registration_info(Some(nick.clone()), None, None);
                     self.try_register()
@@ -477,15 +518,15 @@ impl Connection {
             }
 
             Command::PING(Requests::Ping { originator, target }) => {
-                if target.is_some() && target.unwrap() != self.server.hostname {
+                if target.is_some() && target.unwrap() != self.shared_state.hostname {
                     // Forward to another server.
                     unimplemented!();
                 }
                 vec![
-                    Message {
+                    IRCMessage {
                         prefix: None,
                         command: Command::PONG(Requests::Pong {
-                            originator: self.server.hostname.clone(),
+                            originator: self.shared_state.hostname.clone(),
                             target: None,
                         }),
                     },
@@ -499,10 +540,10 @@ impl Connection {
         }
     }
 
-    pub fn process_broadcast(&mut self, b: Arc<Broadcast>) -> Vec<Message> {
+    pub fn process_system_message(&mut self, message: Arc<Message>) -> Vec<IRCMessage> {
         trace!("Connection state: {:?}.", self);
-        match b.deref() {
-            &Broadcast::Join(ref user, ref channel) => {
+        match message.deref() {
+            &Message::Join(ref user, ref channel) => {
                 unimplemented!()
                 /*vec![
                 Message {
@@ -547,7 +588,7 @@ members: chan.nicks
 });*/,
 ]*/
             }
-            &Broadcast::Part(_, _, _) => unimplemented!(),
+            &Message::Part(_, _, _) => unimplemented!(),
             /*result.push(Message {
       prefix: None,
       command: Command::PART(Requests::Part {
@@ -555,11 +596,17 @@ members: chan.nicks
       message: None,
       }),
       });*/
-            &Broadcast::PrivateMessage => unimplemented!(),
+            &Message::PrivateMessage => unimplemented!(),
             u @ _ => {
                 error!("Broadcast message {:?} not yet implemented.", u);
                 Vec::new()
             }
         }
+    }
+}
+
+impl std::ops::Drop for Connection {
+    fn drop(&mut self) {
+        debug!("{:#?} disconnecting.", self);
     }
 }

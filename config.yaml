@@ -1,0 +1,9 @@
+---
+version: "1.0"
+network_name: IRC Network
+insecure_listen_address: "0.0.0.0:6667"
+secure_listen_address: "0.0.0.0:6697"
+debug_http_listen_address: "0.0.0.0:8000"
+channel_message_queue_length: 25
+connection_message_queue_length: 10
+server_message_queue_length: 50

@@ -5,11 +5,21 @@ use super::super::{configuration, templates};
 
 // State that is initialize on server start, but not preconfigured.
 // Shared, lock-free, across the binary.
-struct SharedState {
+#[derive(Debug)]
+pub struct SharedState {
     pub created: chrono::DateTime<chrono::Utc>,
     pub hostname: String,
-    pub template_engine: handlebars::Handlebars,
+    pub template_engine: TE,
     pub configuration: std::sync::Arc<configuration::Configuration>,
+}
+
+// Workaround since Handlebars doensn't derive Debug.
+pub struct TE(pub handlebars::Handlebars);
+
+impl std::fmt::Debug for TE {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        Ok(())
+    }
 }
 
 impl SharedState {
@@ -40,7 +50,7 @@ impl SharedState {
         Self {
             created: time,
             hostname: hostname,
-            template_engine: template_engine,
+            template_engine: TE(template_engine),
             configuration: configuration,
         }
     }

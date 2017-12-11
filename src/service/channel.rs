@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
-use super::Broadcast;
 use super::user::Identifier as UserIdentifier;
+use super::connection::ConnectionTX;
 
 static CHANNEL_MPSC_LENGTH: usize = 20;
 
@@ -26,27 +26,12 @@ pub struct Identifier {
     pub name: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct Channel {
     ident: Identifier,
     pub topic: Option<String>,
-    #[serde(serialize_with = "member_serializer")]
-    pub users: HashMap<UserIdentifier, RefCell<mpsc::Sender<Arc<Broadcast>>>>,
+    pub users: HashMap<UserIdentifier, RefCell<ConnectionTX>>,
     key: Option<String>,
-}
-
-pub fn member_serializer<S>(
-    t: &HashMap<UserIdentifier, RefCell<mpsc::Sender<Arc<Broadcast>>>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: ser::Serializer,
-{
-    let mut s = serializer.serialize_seq(Some(t.len()))?;
-    for u in t.keys() {
-        s.serialize_element(&u.nickname)?;
-    }
-    s.end()
 }
 
 impl Identifier {

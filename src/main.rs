@@ -1,10 +1,8 @@
 extern crate env_logger;
 extern crate getopts;
-extern crate log;
 extern crate serde_yaml;
 extern crate irc_server;
 
-use std;
 use irc_server::{configuration, service};
 
 fn print_usage(prog: &str, opts: getopts::Options) {
@@ -39,15 +37,19 @@ fn main() {
     }
 
     if matches.opt_present("g") {
-        let file = std::fs::File::create(matches.opt_str("g").unwrap_or("config.yaml")).unwrap();
+        let file = std::fs::File::create(matches.opt_str("g").unwrap_or("config.yaml".to_string()))
+            .unwrap();
         serde_yaml::to_writer(file, &configuration::Configuration::default()).unwrap();
         return;
     }
 
     let config = if matches.opt_present("c") {
-        serde_yaml::from_reader(&std::fs::File::open(matches.opt_str("c").unwrap_or("config.yaml")).unwrap()).unwrap() } else {
-                configuration::Configuration::default()
-            }
+        serde_yaml::from_reader(&std::fs::File::open(
+            matches.opt_str("c").unwrap_or("config.yaml".to_string()),
+        ).unwrap()).unwrap()
+    } else {
+        configuration::Configuration::default()
+    };
 
-            service::start(std::sync::Arc::new(&config));
-    }
+    service::start(std::sync::Arc::new(config));
+}

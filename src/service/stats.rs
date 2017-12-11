@@ -14,18 +14,18 @@ use tokio_core::reactor::Handle;
 use tokio_io::io::{lines, write_all};
 use tokio_io::AsyncRead;
 
-use super::{server, connection, shared_state};
+use super::server::ServerTX;
+use super::{connection, shared_state};
 use super::super::{configuration, templates};
 
 pub fn start_stats_server(
-    http: Option<SocketAddr>,
     reactor: &Handle,
     shared_state: Arc<shared_state::SharedState>,
-    configuration: Arc<configuration::Configuration>,
-    server: Arc<server::Server>,
-    connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
+    server: ServerTX,
 ) {
-    if http.is_none() {
+    return;
+    //unimplemented!();
+    /*    if http.is_none() {
         return;
     }
 
@@ -38,7 +38,6 @@ pub fn start_stats_server(
         .for_each(move |(stream, addr)| {
             trace!("Accepted HTTP connection from {:?}.", addr);
             let server = Arc::clone(&server);
-            let connections = Arc::clone(&connections);
             // TODO(lazau): For now we don't offload this to a worker thread. May want to.
             cloned_reactor.spawn_fn(move || {
                 let (reader, writer) = stream.split();
@@ -49,7 +48,7 @@ pub fn start_stats_server(
                     .and_then(move |line| {
                         trace!("Received HTTP request: {:?}.", line);
                         let mut output = DEBUG_HTTP_RESP.to_string();
-                        output.push_str(&render(server, connections));
+                        output.push_str(&render(server));
                         trace!("Got output data: {:?}.", output);
                         write_all(writer, output.into_bytes())
                     })
@@ -59,15 +58,12 @@ pub fn start_stats_server(
             Ok(())
         })
         .map_err(|_| ());
-    reactor.spawn(srv);
+    reactor.spawn(srv);*/
 }
 
 static DEBUG_HTTP_RESP: &'static str = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
 
-fn render(
-    server: Arc<server::Server>,
-    connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
-) -> String {
+fn render(server: ServerTX) -> String {
     unimplemented!()
     /*let maybe_serialized = serialize(Arc::clone(&configuration), server, connections);
     if let Err(e) = maybe_serialized {
@@ -108,8 +104,8 @@ struct DebugOutputData {
 }
 
 fn serialize(
-    server: Arc<server::Server>,
-    connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,
+    server: ServerTX /*server: Arc<server::Server>,
+    connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,*/
 ) -> Result<DebugOutputData, String> {
     unimplemented!()
     /*let configuration_serialized = serde_yaml::to_string(configuration.deref()).map_err(|e| {
