@@ -115,10 +115,16 @@ pub struct UNKNOWNMODE {}
 pub struct INVITEONLYCHAN {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct BANNEDFROMCHAN {}
+pub struct BannedFromChan {
+    pub nick: String,
+    pub channel: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct BADCHANNELKEY {}
+pub struct BadChannelKey {
+    pub nick: String,
+    pub channel: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct NOPRIVILEGES {}
@@ -665,15 +671,25 @@ impl fmt::Display for INVITEONLYCHAN {
     }
 }
 
-impl fmt::Display for BANNEDFROMCHAN {
+impl fmt::Display for BannedFromChan {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "474")
+        write!(
+            f,
+            "474 {} {} :Cannot join channel (+k)",
+            self.nick,
+            self.channel
+        )
     }
 }
 
-impl fmt::Display for BADCHANNELKEY {
+impl fmt::Display for BadChannelKey {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "475")
+        write!(
+            f,
+            "475 {} {} :Cannot join channel (+k)",
+            self.nick,
+            self.channel
+        )
     }
 }
 

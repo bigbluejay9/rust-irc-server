@@ -107,8 +107,8 @@ pub enum Command {
     ERR_CHANNELISFULL(responses::CHANNELISFULL),
     ERR_UNKNOWNMODE(responses::UNKNOWNMODE),
     ERR_INVITEONLYCHAN(responses::INVITEONLYCHAN),
-    ERR_BANNEDFROMCHAN(responses::BANNEDFROMCHAN),
-    ERR_BADCHANNELKEY(responses::BADCHANNELKEY),
+    ERR_BANNEDFROMCHAN(responses::BannedFromChan),
+    ERR_BADCHANNELKEY(responses::BadChannelKey),
     ERR_NOPRIVILEGES(responses::NOPRIVILEGES),
     ERR_CHANOPRIVSNEEDED(responses::CHANOPRIVSNEEDED),
     ERR_CANTKILLSERVER(responses::CANTKILLSERVER),
@@ -977,10 +977,10 @@ impl str::FromStr for Command {
                 responses::INVITEONLYCHAN::default(),
             )),
             "474" => Ok(Command::ERR_BANNEDFROMCHAN(
-                responses::BANNEDFROMCHAN::default(),
+                responses::BannedFromChan::default(),
             )),
             "475" => Ok(Command::ERR_BADCHANNELKEY(
-                responses::BADCHANNELKEY::default(),
+                responses::BadChannelKey::default(),
             )),
             "481" => Ok(Command::ERR_NOPRIVILEGES(
                 responses::NOPRIVILEGES::default(),

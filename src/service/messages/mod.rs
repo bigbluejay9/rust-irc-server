@@ -44,7 +44,14 @@ pub struct Message {
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
         match &self.prefix {
-            &Some(ref p) => write!(f, ":{} {}", p, self.command),
+            &Some(ref p) => {
+                if p.len() > 0 {
+                    write!(f, ":{} {}", p, self.command)
+                } else {
+                    // Trick to allow disabling prefix.
+                    write!(f, "{}", self.command)
+                }
+            }
             &None => write!(f, "{}", self.command),
         }
     }

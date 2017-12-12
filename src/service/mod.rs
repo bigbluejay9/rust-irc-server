@@ -8,6 +8,8 @@ mod channel;
 mod user;
 
 use chrono;
+use futures::Future;
+use futures::future::Executor;
 use futures::stream::Stream;
 use futures_cpupool::CpuPool;
 use hostname;
@@ -28,7 +30,7 @@ pub fn start(configuration: Arc<configuration::Configuration>) {
         hostname::get_hostname().unwrap(),
         configuration,
     ));
-    let server_tx = server::new(Arc::clone(&shared_state), thread_pool.clone());
+    let (server_tx, srv) = server::new(Arc::clone(&shared_state), thread_pool.clone());
 
     // TODO(lazau): Add secure listener.
     let insecure_lis = TcpListener::bind(
@@ -46,15 +48,25 @@ pub fn start(configuration: Arc<configuration::Configuration>) {
 
     stats::start_stats_server(&handle, Arc::clone(&shared_state), server_tx.clone());
 
-    let srv = insecure_lis.incoming().for_each(|(stream, _)| {
-        connection::handle_new_connection(
-            stream,
-            Arc::clone(&shared_state),
-            server_tx.clone(),
-            thread_pool.clone(),
-        );
-        Ok(())
-    });
+    let lis = insecure_lis
+        .incoming()
+        .for_each(move |(stream, _)| {
+            connection::handle_new_connection(
+                stream,
+                Arc::clone(&shared_state),
+                server_tx.clone(),
+                thread_pool.clone(),
+            );
+            Ok(())
+        })
+        .or_else(|e| {
+            warn!("Insecure listener, IO error: {:?}.", e);
+            Ok(())
+        });
+    match event_loop.execute(lis) {
+        Err(e) => panic!("Failed to start insecure listener: {:?}.", e),
+        _ => {}
+    };
 
     match event_loop.run(srv) {
         Err(e) => error!("Server failure: {:?}.", e),

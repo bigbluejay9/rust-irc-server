@@ -389,8 +389,14 @@ impl fmt::Display for Part {
 
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "MODE");
-        unimplemented!()
+        write!(f, "MODE {}", self.target)?;
+        if let Some(ref m) = self.mode_string {
+            write!(f, " {}", m)?;
+        }
+        if let Some(ref a) = self.mode_args {
+            write!(f, " :{}", a)?;
+        }
+        Ok(())
     }
 }
 

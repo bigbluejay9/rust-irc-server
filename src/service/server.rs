@@ -4,7 +4,7 @@ use futures_cpupool::CpuPool;
 use std;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use super::channel::{Message as ChannelMessage, Identifier as ChannelIdentifier, ChannelTX};
+use super::channel::{self, Message as ChannelMessage, Identifier as ChannelIdentifier, ChannelTX};
 use super::connection::{Message as ConnectionMessage, ConnectionTX};
 use super::user::Identifier as UserIdentifier;
 use super::shared_state::SharedState;
@@ -12,7 +12,14 @@ use super::shared_state::SharedState;
 #[derive(Debug)]
 pub enum Message {
     Register(UserIdentifier, ConnectionTX),
-    Join(UserIdentifier, ChannelIdentifier),
+    Join(
+        UserIdentifier,
+        ConnectionTX,
+        ChannelIdentifier,
+        /*Key*/
+        Option<String>
+    ),
+    Disconnect(UserIdentifier),
 }
 
 pub type ServerTX = mpsc::Sender<Message>;
@@ -37,7 +44,19 @@ struct Server {
     thread_pool: CpuPool,
 }
 
-pub fn new(shared_state: Arc<SharedState>, thread_pool: CpuPool) -> ServerTX {
+macro_rules! send_log_err {
+    ($tx:expr, $message:expr) => {
+        match $tx.try_send($message) {
+            Err(e) => debug!("Send error: {:?}.", e),
+            _ =>{},
+        };
+    }
+}
+
+pub fn new(
+    shared_state: Arc<SharedState>,
+    thread_pool: CpuPool,
+) -> (ServerTX, Box<Future<Item = (), Error = ()>>) {
     let (tx, rx) = mpsc::channel(shared_state.configuration.server_message_queue_length);
     let server = Server {
         users: Mutex::new(HashMap::new()),
@@ -47,53 +66,37 @@ pub fn new(shared_state: Arc<SharedState>, thread_pool: CpuPool) -> ServerTX {
         thread_pool: thread_pool.clone(),
     };
 
-    thread_pool
-        .spawn_fn(move || {
-            rx.then(move |message| -> future::FutureResult<(), ()> {
-                let message = message.unwrap();
-                debug!("Processing server message {:?}.", message);
-                match message {
-                    Message::Register(user, tx) => {
-                        match server.add_user(&user, tx) {
-                            Ok(_) => {
-                                server
-                                    .users
-                                    .lock()
-                                    .unwrap()
-                                    .get_mut(&user)
-                                    .unwrap()
-                                    .try_send(
-                                        Arc::new(ConnectionMessage::ServerRegistrationResult(None)),
-                                    )
-                                    .map_err(|e| debug!("Send error: {:?}.", e));
-                            }
-                            Err(e) => {
-                                server
-                                    .users
-                                    .lock()
-                                    .unwrap()
-                                    .get_mut(&user)
-                                    .unwrap()
-                                    .try_send(Arc::new(
-                                        ConnectionMessage::ServerRegistrationResult(Some(e)),
-                                    ))
-                                    .map_err(|e| debug!("Send error: {:?}.", e));
-                            }
+    let future = thread_pool.spawn_fn(move || {
+        rx.for_each(move |message| -> future::FutureResult<(), ()> {
+            debug!("Processing server message {:?}.", message);
+            match message {
+                Message::Register(user, mut tx) => {
+                    match server.add_user(&user, tx.clone()) {
+                        Ok(_) => {
+                            send_log_err!(tx, ConnectionMessage::ServerRegistrationResult(None));
+                        }
+                        Err(e) => {
+                            send_log_err!(tx, ConnectionMessage::ServerRegistrationResult(Some(e)));
                         }
                     }
-                    Message::Join(user, channel) => unimplemented!(),
-                    _ => unimplemented!(),
                 }
-                future::ok(())
-            }).collect()
+                Message::Join(user, connection_tx, channel, key) => {
+                    let msg = ChannelMessage::Join(user, connection_tx, key);
+                    send_log_err!(server.lookup_channel(channel), msg);
+                }
+                Message::Disconnect(user) => server.remove_user(&user),
+                _ => unimplemented!(),
+            };
+            future::ok(())
         })
-        .forget();
-    tx
+    });
+    (tx, Box::new(future))
 }
 
 impl Server {
     pub fn add_user(&self, user: &UserIdentifier, tx: ConnectionTX) -> Result<(), ServerError> {
         let mut users = self.users.lock().unwrap();
+        debug!("Inserting {:?} into {:?}.", user, users);
         if users.contains_key(user) {
             return Err(ServerError::NickInUse);
         }
@@ -101,10 +104,9 @@ impl Server {
         Ok(())
     }
 
-    pub fn remove_user(&self, user: &UserIdentifier) -> Result<(), ServerError> {
-        match self.users.lock().unwrap().remove(user) {
-            Some(_) => Ok(()),
-            None => Err(ServerError::UnknownUser),
+    pub fn remove_user(&self, user: &UserIdentifier) {
+        if self.users.lock().unwrap().remove(user).is_none() {
+            warn!("Disconnecting unknown user: {:?}.", user);
         }
     }
 
@@ -128,27 +130,14 @@ impl Server {
         Ok(())
     }
 
-    pub fn lookup_channel(
-        &self,
-        channel: &ChannelIdentifier,
-    ) -> Result<mpsc::Sender<Arc<ChannelMessage>>, ServerError> {
+    pub fn lookup_channel(&self, channel: ChannelIdentifier) -> ChannelTX {
         debug!("Looking up channel: {:?}.", channel);
         let mut channels = self.channels.lock().unwrap();
-        if channels.contains_key(channel) {
-            return Ok(channels.get(channel).unwrap().clone());
+        if channels.contains_key(&channel) {
+            return channels.get(&channel).unwrap().clone();
+        } else {
+            channel::new(channel, Arc::clone(&self.shared_state), &self.thread_pool)
         }
-
-        // Create new channel.
-        self.create_channel(channels, channel)
-    }
-
-    fn create_channel(
-        &self,
-        channels: MutexGuard<HashMap<ChannelIdentifier, mpsc::Sender<Arc<ChannelMessage>>>>,
-        channel: &ChannelIdentifier,
-    ) -> Result<mpsc::Sender<Arc<ChannelMessage>>, ServerError> {
-        unimplemented!()
-        //assert!(channels.insert(channel.clone
     }
 
     /*pub fn join(&mut self, user: &UserIdentifier, channels: Vec<(&String, Option<&String>)>) {

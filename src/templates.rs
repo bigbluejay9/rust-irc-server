@@ -1,3 +1,5 @@
+use serde::ser;
+
 pub static DEBUG_TEMPLATE_NAME: &'static str = "debug_html_template";
 pub static DEBUG_HTML_TEMPLATE: &'static str = "
 <!doctype html>
@@ -71,11 +73,26 @@ pub static DEBUG_HTML_TEMPLATE: &'static str = "
 </body>
 </html>";
 
+
 pub static RPL_WELCOME_TEMPLATE_NAME: &'static str = "rpl_welcome_template_name";
 pub static RPL_WELCOME_TEMPLATE: &'static str = "Welcome to the {{network_name}} Network, {{nick}}";
+#[derive(Serialize)]
+pub struct Welcome<'a> {
+    pub network_name: &'a str,
+    pub nick: &'a str,
+}
 
 pub static RPL_YOURHOST_TEMPLATE_NAME: &'static str = "rpl_yourhost_template_name";
 pub static RPL_YOURHOST_TEMPLATE: &'static str = "Your host is {{hostname}}, running version {{version}}";
+#[derive(Serialize)]
+pub struct YourHost<'a> {
+    pub hostname: &'a str,
+    pub version: &'a str,
+}
 
 pub static RPL_CREATED_TEMPLATE_NAME: &'static str = "rpl_created_template_name";
 pub static RPL_CREATED_TEMPLATE: &'static str = "This server was created {{created}}";
+#[derive(Serialize)]
+pub struct Created<'a> {
+    pub created: &'a str,
+}
