@@ -1,4 +1,6 @@
 use futures::*;
+use futures::stream::*;
+use futures::sink::*;
 use futures::sync::mpsc;
 use futures_cpupool::CpuPool;
 use std::{self, fmt, io};
@@ -35,7 +37,13 @@ enum ConnectionType {
 
 #[derive(Debug)]
 pub enum Message {
-    // (User, Channel).
+    // Direct message to be sent down the connection.
+    Message(Vec<IRCMessage>),
+
+    // XXX: To be implemented!
+    Event,
+
+    /*// (User, Channel).
     Join(user::Identifier, String),
     // (User, Channel, Message)
     Part(user::Identifier, String, Option<String>),
@@ -53,7 +61,7 @@ pub enum Message {
     UserModeChanged(Arc<(user::Identifier, SetMode, Vec<UserMode>)>),
 
     // Server Responses.
-    ServerRegistrationResult(Option<ServerError>),
+    ServerRegistrationResult(Option<ServerError>),*/
 }
 
 pub type ConnectionTX = mpsc::Sender<Message>;
@@ -144,70 +152,60 @@ pub fn handle_new_connection(
         Connection::new(socket, shared_state, server_tx, tx),
     ));
 
+    //.map(|s| ConnectionEvent::Socket(s))
+    //.select(rx.then(|e| Ok(ConnectionEvent::Message(e.unwrap()))))
+
+
     let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
     thread_pool
         .spawn_fn(move || {
             stream
-                .map(|s| ConnectionEvent::Socket(s))
-                .select(rx.then(|e| Ok(ConnectionEvent::Message(e.unwrap()))))
-                .then(move |event| {
+                .for_each(move |message| {
                     // ** Process future.
-                    trace!("Connection event: {:?}.", event);
-                    if event.is_err() {
-                        let err = event.err().unwrap();
-                        error!("Unexpected upstream error: {:?}.", err);
-                        return future::err(err);
-                    }
-
-                    let res = match event.unwrap() {
-                        ConnectionEvent::Socket(s) => {
-                            let message = match s.parse::<IRCMessage>() {
-                                Ok(m) => m,
-                                // TODO(lazau): Maybe do some additional error processing here?
-                                Err(e) => {
-                                    warn!("Failed to parse {}: {:?}.", s, e);
-                                    return future::ok(Vec::new());
-                                }
-                            };
-                            debug!("Request [{:?}].", message);
-                            connection.lock().unwrap().process_irc_message(message)
-                        }
-
-                        ConnectionEvent::Message(m) => {
-                            debug!("Message [{:?}].", m);
-                            connection.lock().unwrap().process_system_message(m)
+                    trace!("Incoming message: {:?}.", message);
+                    let m = match message.parse::<IRCMessage>() {
+                        Ok(m) => m,
+                        // TODO(lazau): Maybe do some additional error processing here?
+                        Err(e) => {
+                            warn!("Failed to parse {}: {:?}.", message, e);
+                            return Ok(());
                         }
                     };
-                    debug!("Response [{:?}].", res);
-                    future::ok(res)
+                    debug!("Request [{:?}].", m);
+                    connection.lock().unwrap().process_irc_message(m);
+                    Ok(())
                 })
-                .then(move |messages: Result<Vec<IRCMessage>, _>| {
-                    // ** Serialization future.
-                    if messages.is_err() {
-                        return future::err(messages.err().unwrap());
-                    }
-                    let mut result = Vec::new();
-                    // TODO(lazau): Perform 512 max line size here.
-                    for mut m in messages.unwrap() {
-                        if m.prefix.is_none() {
-                            m.prefix = Some(shared_state_serialization.hostname.clone());
-                        }
-                        // TODO(lazau): Convert serialization error to future::err.
-                        result.push(format!("{}", m));
-                    }
-                    future::ok(result)
+                .or_else(|err| {
+                    error!("Input IO error: {:?}.", err);
+                    future::err(err)
                 })
-                .forward(sink)
-                .then(
-                    move |e: Result<(_, _), io::Error>| -> future::FutureResult<(), ()> {
-                        // ** Cleanup future.
-                        if let Err(e) = e {
-                            warn!("Connection error: {:?}.", e);
-                        }
-                        future::ok(())
-                    },
-                    // Connection gets dropped.
-                )
+        })
+        .forget();
+    thread_pool
+        .spawn_fn(move || {
+            rx.for_each(move |connection_event| {
+                let mut messages = match connection_event {
+                    Message::Message(m) => m,
+                    Message::Event => unimplemented!(),
+                };
+                let mut result: Vec<String> = Vec::new();
+                // TODO(lazau): Perform 512 max line size here.
+                for mut m in messages {
+                    if m.prefix.is_none() {
+                        m.prefix = Some(shared_state_serialization.hostname.clone());
+                    }
+                    result.push(format!("{}", m));
+                }
+                // Encoder can't error.
+                sink.send(result).then(|_| future::ok::<(), ()>(()))
+            }).or_else(|err| {
+                    panic!("Connection TX error: {:?}. Is this even possible?", err);
+                    future::err(())
+                })
+                .then(|f| {
+                    error!("Connection RX closed.");
+                    future::ok(())
+                })
         })
         .forget();
 }

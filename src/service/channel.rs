@@ -85,35 +85,32 @@ pub fn new(ident: Identifier, shared_state: Arc<SharedState>, thread_pool: &CpuP
     }));
 
     thread_pool
-        .spawn(
-            rx.and_then(move |message| {
-                let mut channel = channel.lock().unwrap();
-                debug!("Channel {} processing {:?}.", channel.name(), message);
-                match message {
-                    Message::Join(user, tx, key) => {
-                        match channel.try_join(&user, tx, key) {
-                            Ok(tx) => {
-                                let msg = ConnectionMessage::ChannelJoin(Ok((
-                                    channel.ident.clone(),
-                                    channel.topic.clone(),
-                                    channel.users.keys().cloned().collect(),
-                                    channel.tx.clone(),
-                                )));
-                                send_log_err!(channel.lookup_user_mut(&user).unwrap(), msg);
-                            }
-                            Err((err, mut tx)) => {
-                                let msg = ConnectionMessage::ChannelJoin(
-                                    Err((err, channel.ident.clone())),
-                                );
-                                send_log_err!(tx, msg);
-                            }
+        .spawn(rx.and_then(move |message| {
+            let mut channel = channel.lock().unwrap();
+            debug!("Channel {} processing {:?}.", channel.name(), message);
+            match message {
+                Message::Join(user, tx, key) => {
+                    match channel.try_join(&user, tx, key) {
+                        Ok(tx) => {
+                            let msg = ConnectionMessage::ChannelJoin(Ok((
+                                channel.ident.clone(),
+                                channel.topic.clone(),
+                                channel.users.keys().cloned().collect(),
+                                channel.tx.clone(),
+                            )));
+                            send_log_err!(channel.lookup_user_mut(&user).unwrap(), msg);
+                        }
+                        Err((err, mut tx)) => {
+                            let msg =
+                                ConnectionMessage::ChannelJoin(Err((err, channel.ident.clone())));
+                            send_log_err!(tx, msg);
                         }
                     }
-                    u @ _ => error!("{:?} not yet implemented!", u),
                 }
-                Ok(())
-            }).collect(),
-        )
+                u @ _ => error!("{:?} not yet implemented!", u),
+            }
+            future::ok(())
+        }))
         .forget();
     tx
 }

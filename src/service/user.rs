@@ -1,8 +1,12 @@
+use futures::*;
+use futures::sync::mpsc;
+use futures_cpupool::CpuPool;
 use std::{self, fmt, str};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use super::connection::{Message as ConnectionMessage, ConnectionTX};
 use super::channel::{Identifier as ChannelIdentifier, Message as ChannelMessage, ChannelTX};
+use super::shared_state::SharedState;
 
 // Stored in the server.
 #[derive(Debug, Default, Clone)]
@@ -74,6 +78,21 @@ macro_rules! send_log_err {
             _ =>{},
         };
     }
+}
+
+pub fn new(
+    ident: &Identifier,
+    connection_tx: ConnectionTX,
+    shared_state: Arc<SharedState>,
+    thread_pool: CpuPool,
+) {
+    let (tx, rx) = mpsc::channel(shared_state.configuration.user_message_queue_length);
+    let user = Arc::new(Mutex::new(User {
+        ident: ident.clone(),
+        modes: HashSet::new(),
+        channels: HashMap::new(),
+        connection_tx: connection_tx,
+    }));
 }
 
 impl User {

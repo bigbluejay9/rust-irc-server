@@ -13,6 +13,7 @@ pub struct Configuration {
 
     pub channel_message_queue_length: usize,
     pub connection_message_queue_length: usize,
+    pub user_message_queue_length: usize,
     pub server_message_queue_length: usize,
 }
 
@@ -28,6 +29,7 @@ impl std::default::Default for Configuration {
 
             channel_message_queue_length: 25,
             connection_message_queue_length: 10,
+            user_message_queue_length: 10,
             server_message_queue_length: 50,
         }
     }
