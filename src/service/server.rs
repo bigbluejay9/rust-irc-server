@@ -4,7 +4,7 @@ use futures_cpupool::CpuPool;
 use std;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use super::channel::{self, Message as ChannelMessage, Identifier as ChannelIdentifier, ChannelTX};
+use super::channel::{Channel, Identifier as ChannelIdentifier};
 use super::connection::{Message as ConnectionMessage, ConnectionTX};
 use super::user::Identifier as UserIdentifier;
 use super::shared_state::SharedState;
@@ -32,28 +32,25 @@ pub enum ServerError {
 }
 
 #[derive(Debug)]
-struct Server {
+pub struct Server {
     // Unlike Channel/Connection,
     // All known users.
-    users: Mutex<HashMap<UserIdentifier, ConnectionTX>>,
+    users: HashMap<UserIdentifier, ConnectionTX>,
     // All known channels.
-    channels: Mutex<HashMap<ChannelIdentifier, ChannelTX>>,
-
-    tx: ServerTX,
+    channels: HashMap<ChannelIdentifier, Channel>,
     shared_state: Arc<SharedState>,
-    thread_pool: CpuPool,
 }
 
-macro_rules! send_log_err {
+/*macro_rules! send_log_err {
     ($tx:expr, $message:expr) => {
         match $tx.try_send($message) {
             Err(e) => debug!("Send error: {:?}.", e),
             _ =>{},
         };
     }
-}
+}*/
 
-pub fn new(
+/*pub fn new(
     shared_state: Arc<SharedState>,
     thread_pool: CpuPool,
 ) -> (ServerTX, Box<Future<Item = (), Error = ()>>) {
@@ -73,10 +70,10 @@ pub fn new(
                 Message::Register(user, mut tx) => {
                     match server.add_user(&user, tx.clone()) {
                         Ok(_) => {
-                            send_log_err!(tx, ConnectionMessage::ServerRegistrationResult(None));
+                            //send_log_err!(tx, ConnectionMessage::ServerRegistrationResult(None));
                         }
                         Err(e) => {
-                            send_log_err!(tx, ConnectionMessage::ServerRegistrationResult(Some(e)));
+                            //send_log_err!(tx, ConnectionMessage::ServerRegistrationResult(Some(e)));
                         }
                     }
                 }
@@ -91,28 +88,36 @@ pub fn new(
         })
     });
     (tx, Box::new(future))
-}
+}*/
 
 impl Server {
-    pub fn add_user(&self, user: &UserIdentifier, tx: ConnectionTX) -> Result<(), ServerError> {
-        let mut users = self.users.lock().unwrap();
-        debug!("Inserting {:?} into {:?}.", user, users);
-        if users.contains_key(user) {
+    pub fn new(shared_state: Arc<SharedState>) -> Self {
+        // TODO(lazau): Load preconfigured channels.
+        Self {
+            users: HashMap::new(),
+            channels: HashMap::new(),
+            shared_state: shared_state,
+        }
+    }
+
+    pub fn add_user(&mut self, user: &UserIdentifier, tx: ConnectionTX) -> Result<(), ServerError> {
+        debug!("Inserting {:?} into {:?}.", user, self.users);
+        if self.users.contains_key(user) {
             return Err(ServerError::NickInUse);
         }
-        users.insert(user.clone(), tx);
+        self.users.insert(user.clone(), tx);
         Ok(())
     }
 
-    pub fn remove_user(&self, user: &UserIdentifier) {
-        if self.users.lock().unwrap().remove(user).is_none() {
-            warn!("Disconnecting unknown user: {:?}.", user);
+    pub fn remove_user(&mut self, user: &UserIdentifier) {
+        if self.users.remove(user).is_none() {
+            warn!("Removing unknown user: {:?}.", user);
         }
     }
 
     // Replaces old_nick with new_nick for user.
     pub fn replace_nick(
-        &self,
+        &mut self,
         old: &UserIdentifier,
         new: &UserIdentifier,
     ) -> Result<(), ServerError> {
@@ -121,23 +126,23 @@ impl Server {
             old,
             new,
         );
-        let mut users = self.users.lock().unwrap();
-        if users.contains_key(new) {
+        if self.users.contains_key(new) {
             return Err(ServerError::NickInUse);
         }
-        let removed = users.remove(old).unwrap();
-        users.insert(new.clone(), removed);
+        let removed = self.users.remove(old).unwrap();
+        self.users.insert(new.clone(), removed);
         Ok(())
     }
 
-    pub fn lookup_channel(&self, channel: ChannelIdentifier) -> ChannelTX {
+    pub fn lookup_channel(&mut self, channel: &ChannelIdentifier) -> &Channel {
         debug!("Looking up channel: {:?}.", channel);
-        let mut channels = self.channels.lock().unwrap();
-        if channels.contains_key(&channel) {
-            return channels.get(&channel).unwrap().clone();
-        } else {
-            channel::new(channel, Arc::clone(&self.shared_state), &self.thread_pool)
+        if !self.channels.contains_key(&channel) {
+            self.channels.insert(
+                channel.clone(),
+                Channel::new(channel, Arc::clone(&self.shared_state)),
+            );
         }
+        self.channels.get(&channel).unwrap()
     }
 
     /*pub fn join(&mut self, user: &UserIdentifier, channels: Vec<(&String, Option<&String>)>) {
@@ -222,10 +227,4 @@ impl Server {
     pub fn part_all(&mut self, user: &UserIdentifier, message: Option<&String>) {
         //unimplemented!()
     }*/
-}
-
-impl std::ops::Drop for Server {
-    fn drop(&mut self) {
-        debug!("Server is closing.\nFinal state: {:#?}.", self);
-    }
 }

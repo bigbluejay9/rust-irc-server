@@ -14,14 +14,14 @@ use tokio_core::reactor::Handle;
 use tokio_io::io::{lines, write_all};
 use tokio_io::AsyncRead;
 
-use super::server::ServerTX;
+use super::server::{ServerTX, Server};
 use super::{connection, shared_state};
 use super::super::{configuration, templates};
 
 pub fn start_stats_server(
     reactor: &Handle,
     shared_state: Arc<shared_state::SharedState>,
-    server: ServerTX,
+    server: Arc<Mutex<Server>>,
 ) {
     return;
     //unimplemented!();

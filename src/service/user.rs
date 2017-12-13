@@ -4,11 +4,36 @@ use futures_cpupool::CpuPool;
 use std::{self, fmt, str};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use super::server::ServerTX;
 use super::connection::{Message as ConnectionMessage, ConnectionTX};
-use super::channel::{Identifier as ChannelIdentifier, Message as ChannelMessage, ChannelTX};
+use super::channel::{Identifier as ChannelIdentifier, ChannelError, Channel};
 use super::shared_state::SharedState;
 
-// Stored in the server.
+#[derive(Debug)]
+pub enum Message {
+    // (User, Channel).
+    Join(String),
+    // (User, Channel, Message)
+    Part(String, Option<String>),
+    PrivateMessage,
+
+    // Channel responses.
+    /*ChannelJoin(
+        Result<
+            (ChannelIdentifier, Option<String>, Vec<UserIdentifier>, ChannelTX),
+            (ChannelError, ChannelIdentifier),
+        >
+    ),*/
+
+    // User responses.
+    //UserModeChanged(Arc<(user::Identifier, SetMode, Vec<UserMode>)>),
+
+    // Server Responses.
+    //ServerRegistrationResult(Option<ServerError>),
+}
+
+pub type UserTX = mpsc::Sender<Message>;
+
 #[derive(Debug, Default, Clone)]
 pub struct Identifier {
     pub nickname: String,
@@ -20,9 +45,11 @@ pub struct Identifier {
 #[derive(Debug)]
 pub struct User {
     ident: Identifier,
-    connection_tx: ConnectionTX,
+    shared_state: Arc<SharedState>,
     modes: HashSet<UserMode>,
-    channels: HashMap<ChannelIdentifier, ChannelTX>,
+    channels: HashSet<ChannelIdentifier>,
+    connection_tx: ConnectionTX,
+    server_tx: ServerTX,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -82,40 +109,53 @@ macro_rules! send_log_err {
 
 pub fn new(
     ident: &Identifier,
-    connection_tx: ConnectionTX,
     shared_state: Arc<SharedState>,
+    connection_tx: ConnectionTX,
+    server_tx: ServerTX,
     thread_pool: CpuPool,
-) {
+) -> UserTX {
     let (tx, rx) = mpsc::channel(shared_state.configuration.user_message_queue_length);
     let user = Arc::new(Mutex::new(User {
         ident: ident.clone(),
+        shared_state: shared_state,
         modes: HashSet::new(),
-        channels: HashMap::new(),
+        channels: HashSet::new(),
         connection_tx: connection_tx,
+        server_tx: server_tx,
     }));
+
+    thread_pool
+        .spawn(rx.for_each(move |message| {
+            let mut user = user.lock().unwrap();
+            debug!("User {} processing {:?}.", user.identifier(), message);
+            match message {
+                /*Message::Join(user, tx, key) => {
+                    match channel.try_join(&user, tx, key) {
+                        Ok(tx) => {
+                            let msg = ConnectionMessage::ChannelJoin(Ok((
+                                channel.ident.clone(),
+                                channel.topic.clone(),
+                                channel.users.keys().cloned().collect(),
+                                channel.tx.clone(),
+                            )));
+                            send_log_err!(channel.lookup_user_mut(&user).unwrap(), msg);
+                        }
+                        Err((err, mut tx)) => {
+                            let msg =
+                                ConnectionMessage::ChannelJoin(Err((err, channel.ident.clone())));
+                            send_log_err!(tx, msg);
+                        }
+                    }
+                }*/
+                u @ _ => error!("{:?} not yet implemented!", u),
+            }
+            Ok(())
+        }))
+        .forget();
+    tx
 }
 
 impl User {
-    pub fn new(
-        nickname: &String,
-        username: &String,
-        realname: &String,
-        hostname: &String,
-        connection_tx: ConnectionTX,
-    ) -> Self {
-        User {
-            ident: Identifier {
-                nickname: nickname.clone(),
-                username: username.clone(),
-                realname: realname.clone(),
-                hostname: hostname.clone(),
-            },
-            modes: HashSet::new(),
-            channels: HashMap::new(),
-            connection_tx: connection_tx,
-        }
-    }
-
     pub fn identifier(&self) -> &Identifier {
         &self.ident
     }
@@ -146,16 +186,12 @@ impl User {
         );
 
         if modified.len() > 0 {
-            let message = ConnectionMessage::UserModeChanged(
+            /*let message = ConnectionMessage::UserModeChanged(
                 Arc::new((self.identifier().clone(), set.clone(), modified)),
-            );
+            );*/
             // TODO(lazau): Should we broadcast to all Channels too?
-            send_log_err!(self.connection_tx, message);
+            //send_log_err!(self.connection_tx, message);
         }
-    }
-
-    pub fn joined_channel(&mut self, channel: &ChannelIdentifier, tx: ChannelTX) {
-        assert!(self.channels.insert(channel.clone(), tx).is_none());
     }
 }
 

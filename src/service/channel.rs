@@ -13,33 +13,18 @@ use super::user::Identifier as UserIdentifier;
 use super::connection::{ConnectionTX, Message as ConnectionMessage};
 use super::shared_state::SharedState;
 
-static CHANNEL_MPSC_LENGTH: usize = 20;
-
-#[derive(Debug)]
-pub enum Message {
-    Join(
-        UserIdentifier,
-        ConnectionTX,
-        /*Key*/
-        Option<String>
-    ),
-}
-
-pub type ChannelTX = mpsc::Sender<Message>;
-
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct Identifier {
     pub name: String,
 }
 
 #[derive(Debug)]
-struct Channel {
+pub struct Channel {
     ident: Identifier,
     topic: Option<String>,
     users: HashMap<UserIdentifier, ConnectionTX>,
     banned: HashSet<UserIdentifier>,
     key: Option<String>,
-    tx: ChannelTX,
 }
 
 impl Identifier {
@@ -73,48 +58,6 @@ macro_rules! send_log_err {
     }
 }
 
-pub fn new(ident: Identifier, shared_state: Arc<SharedState>, thread_pool: &CpuPool) -> ChannelTX {
-    let (tx, rx) = mpsc::channel(shared_state.configuration.channel_message_queue_length);
-    let channel = Arc::new(Mutex::new(Channel {
-        ident: ident,
-        topic: None,
-        users: HashMap::new(),
-        banned: HashSet::new(),
-        key: None,
-        tx: tx.clone(),
-    }));
-
-    thread_pool
-        .spawn(rx.and_then(move |message| {
-            let mut channel = channel.lock().unwrap();
-            debug!("Channel {} processing {:?}.", channel.name(), message);
-            match message {
-                Message::Join(user, tx, key) => {
-                    match channel.try_join(&user, tx, key) {
-                        Ok(tx) => {
-                            let msg = ConnectionMessage::ChannelJoin(Ok((
-                                channel.ident.clone(),
-                                channel.topic.clone(),
-                                channel.users.keys().cloned().collect(),
-                                channel.tx.clone(),
-                            )));
-                            send_log_err!(channel.lookup_user_mut(&user).unwrap(), msg);
-                        }
-                        Err((err, mut tx)) => {
-                            let msg =
-                                ConnectionMessage::ChannelJoin(Err((err, channel.ident.clone())));
-                            send_log_err!(tx, msg);
-                        }
-                    }
-                }
-                u @ _ => error!("{:?} not yet implemented!", u),
-            }
-            future::ok(())
-        }))
-        .forget();
-    tx
-}
-
 #[derive(Debug)]
 pub enum ChannelError {
     BadKey,
@@ -123,23 +66,33 @@ pub enum ChannelError {
 }
 
 impl Channel {
-    fn name(&self) -> &String {
+    pub fn new(ident: &Identifier, shared_state: Arc<SharedState>) -> Self {
+        Self {
+            ident: ident.clone(),
+            topic: None,
+            users: HashMap::new(),
+            banned: HashSet::new(),
+            key: None,
+        }
+    }
+
+    pub fn name(&self) -> &String {
         &self.ident.name
     }
 
-    fn identifier(&self) -> &Identifier {
+    pub fn identifier(&self) -> &Identifier {
         &self.ident
     }
 
-    fn verify_key(&self, key: Option<String>) -> bool {
+    pub fn verify_key(&self, key: Option<String>) -> bool {
         self.key.as_ref() == key.as_ref()
     }
 
-    fn lookup_user_mut(&mut self, user: &UserIdentifier) -> Option<&mut ConnectionTX> {
+    pub fn lookup_user_mut(&mut self, user: &UserIdentifier) -> Option<&mut ConnectionTX> {
         self.users.get_mut(user)
     }
 
-    fn try_join(
+    pub fn try_join(
         &mut self,
         user: &UserIdentifier,
         tx: ConnectionTX,
