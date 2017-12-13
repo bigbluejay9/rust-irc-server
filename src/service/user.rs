@@ -4,9 +4,9 @@ use futures_cpupool::CpuPool;
 use std::{self, fmt, str};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use super::server::ServerTX;
 use super::connection::{Message as ConnectionMessage, ConnectionTX};
 use super::channel::{Identifier as ChannelIdentifier, ChannelError, Channel};
+use super::server::Server;
 use super::shared_state::SharedState;
 
 #[derive(Debug)]
@@ -45,11 +45,11 @@ pub struct Identifier {
 #[derive(Debug)]
 pub struct User {
     ident: Identifier,
-    shared_state: Arc<SharedState>,
     modes: HashSet<UserMode>,
     channels: HashSet<ChannelIdentifier>,
-    connection_tx: ConnectionTX,
-    server_tx: ServerTX,
+    shared_state: Arc<SharedState>,
+    server: Arc<Mutex<Server>>,
+    tx: ConnectionTX,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -107,11 +107,10 @@ macro_rules! send_log_err {
     }
 }
 
-pub fn new(
+/*pub fn new(
     ident: &Identifier,
     shared_state: Arc<SharedState>,
     connection_tx: ConnectionTX,
-    server_tx: ServerTX,
     thread_pool: CpuPool,
 ) -> UserTX {
     let (tx, rx) = mpsc::channel(shared_state.configuration.user_message_queue_length);
@@ -121,7 +120,6 @@ pub fn new(
         modes: HashSet::new(),
         channels: HashSet::new(),
         connection_tx: connection_tx,
-        server_tx: server_tx,
     }));
 
     thread_pool
@@ -153,9 +151,25 @@ pub fn new(
         }))
         .forget();
     tx
-}
+}*/
 
 impl User {
+    pub fn new(
+        ident: &Identifier,
+        shared_state: Arc<SharedState>,
+        server: Arc<Mutex<Server>>,
+        tx: ConnectionTX,
+    ) -> Self {
+        Self {
+            ident: ident.clone(),
+            modes: HashSet::new(),
+            channels: HashSet::new(),
+            shared_state: shared_state,
+            server: server,
+            tx: tx,
+        }
+    }
+
     pub fn identifier(&self) -> &Identifier {
         &self.ident
     }

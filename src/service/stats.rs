@@ -14,7 +14,7 @@ use tokio_core::reactor::Handle;
 use tokio_io::io::{lines, write_all};
 use tokio_io::AsyncRead;
 
-use super::server::{ServerTX, Server};
+use super::server::Server;
 use super::{connection, shared_state};
 use super::super::{configuration, templates};
 
@@ -63,7 +63,7 @@ pub fn start_stats_server(
 
 static DEBUG_HTTP_RESP: &'static str = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
 
-fn render(server: ServerTX) -> String {
+/*fn render(server: ServerTX) -> String {
     unimplemented!()
     /*let maybe_serialized = serialize(Arc::clone(&configuration), server, connections);
     if let Err(e) = maybe_serialized {
@@ -81,7 +81,7 @@ fn render(server: ServerTX) -> String {
             "Failed to render debug template.".to_string()
         }
     }*/
-}
+}*/
 
 #[derive(Debug, Serialize)]
 struct DebugOutputData {
@@ -103,7 +103,7 @@ struct DebugOutputData {
     nicks_to_users: HashMap<String, String>,
 }
 
-fn serialize(
+/*fn serialize(
     server: ServerTX /*server: Arc<server::Server>,
     connections: Arc<Mutex<HashMap<super::SocketPair, Arc<Mutex<connection::Connection>>>>>,*/
 ) -> Result<DebugOutputData, String> {
@@ -180,4 +180,4 @@ fn serialize(
         channels_to_nicks: channels_to_nicks,
         nicks_to_users: nicks_to_users,
     })*/
-}
+}*/

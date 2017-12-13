@@ -14,7 +14,7 @@ use super::messages::Message as IRCMessage;
 use super::messages::commands::{Command, requests as Requests, responses as Responses};
 use super::shared_state::SharedState;
 use super::channel::{Identifier as ChannelIdentifier, ChannelError, Channel};
-use super::server::{Server, Message as ServerMessage, ServerTX, ServerError};
+use super::server::{Server, ServerError};
 use super::user::{User, UserTX, Message as UserMessage, Identifier as UserIdentifier, UserMode,
                   SetMode};
 use super::super::templates;
@@ -33,7 +33,7 @@ pub struct SocketPair {
 enum ConnectionType {
     // Unkown type. After registration is complete will be either Client or Server.
     Registering(Registration),
-    Client(UserIdentifier),
+    Client(User),
     Server, // unimplemented.
 }
 
@@ -75,7 +75,9 @@ pub struct Connection {
     // Unique per Connection.
     socket: SocketPair,
     conn_type: ConnectionType,
+    server: Arc<Mutex<Server>>,
     shared_state: Arc<SharedState>,
+    tx: ConnectionTX,
 }
 
 impl fmt::Display for SocketPair {
@@ -102,83 +104,6 @@ macro_rules! error_resp {
     ($err:expr) => { vec![ IRCMessage { prefix: None, command: $err } ] };
 }
 
-/*pub fn handle_new_connection(
-    stream: tokio_core::net::TcpStream,
-    shared_state: Arc<SharedState>,
-    server_tx: ServerTX,
-    thread_pool: CpuPool,
-) {
-    let socket = SocketPair {
-        local: stream.local_addr().unwrap(),
-        remote: stream.peer_addr().unwrap(),
-    };
-    let shared_state_serialization = Arc::clone(&shared_state);
-    let (tx, rx) = mpsc::channel(shared_state.configuration.connection_message_queue_length);
-    let multiplexed_sink = MultiplexedSink::new(server_tx.clone(), tx.clone());
-    let connection = Arc::new(Mutex::new(Connection::new(
-        socket.clone(),
-        shared_state,
-        Arc::clone(&multiplexed_sink.users),
-        server_tx,
-        tx,
-    )));
-    let c_stream = Arc::clone(&connection);
-    let c_sink = Arc::clone(&connection);
-
-    let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
-    thread_pool
-        .spawn_fn(move || {
-            let connection = c_stream;
-            stream
-                .then(move |message| {
-                    if message.is_err() {
-                        error!("Cannot decode message: {:?}.", message.err());
-                        return Ok(TXDestination::None);
-                    }
-                    // ** Process future.
-                    let message = message.unwrap();
-                    trace!("Incoming message: {:?}.", message);
-                    let m = match message.parse::<IRCMessage>() {
-                        Ok(m) => m,
-                        // TODO(lazau): Maybe do some additional error processing here?
-                        Err(e) => {
-                            warn!("Failed to parse {}: {:?}.", message, e);
-                            return Ok(TXDestination::None);
-                        }
-                    };
-                    debug!("Request [{:?}].", m);
-                    let mut connection = connection.lock().unwrap();
-                    Ok(connection.process_irc_message(m))
-                })
-                .forward(multiplexed_sink)
-                .then(move |_: Result<_, ()>| {
-                    debug!("Connection {} input stream closed.", socket);
-                    future::ok::<(), ()>(())
-                })
-        })
-        .forget();
-    thread_pool
-        .spawn_fn(move || {
-            let connection = c_sink;
-            rx.then(move |connection_event| {
-                let messages = match connection_event.expect("connection RX cannot fail") {
-                    Message::Message(m) => m,
-                    Message::Event(e) => connection.lock().unwrap().process_system_event(e),
-                };
-                let mut result: Vec<String> = Vec::new();
-                // TODO(lazau): Perform 512 max line size here.
-                for mut m in messages {
-                    if m.prefix.is_none() {
-                        m.prefix = Some(shared_state_serialization.hostname.clone());
-                    }
-                    result.push(format!("{}", m));
-                }
-                future::ok::<Vec<String>, io::Error>(result)
-            }).forward(sink)
-        })
-        .forget();
-}*/
-
 impl Connection {
     pub fn handle_new_connection(
         stream: tokio_core::net::TcpStream,
@@ -189,12 +114,13 @@ impl Connection {
             local: stream.local_addr().unwrap(),
             remote: stream.peer_addr().unwrap(),
         };
+        let (tx, rx) = mpsc::channel(shared_state.configuration.connection_message_queue_length);
         let connection = Arc::new(Mutex::new(Connection::new(
             socket.clone(),
             shared_state.clone(),
             server.clone(),
+            tx,
         )));
-        let (tx, rx) = mpsc::channel(shared_state.configuration.connection_message_queue_length);
 
         let connection_cleanup = Arc::clone(&connection);
         let shared_state_serialization = Arc::clone(&shared_state);
@@ -260,66 +186,27 @@ impl Connection {
                 Ok(())
             });
         Box::new(fut)
-
-        /*.then(move |event| {
-                trace!("Connection event {:?}.", event);
-                if event.is_err() {
-                    error!("Cannot decode message: {:?}.", message.err());
-                    return None;
-                }
-                // ** Process future.
-                let message = message.unwrap();
-                trace!("Incoming message: {:?}.", message);
-                let m = match message.parse::<IRCMessage>() {
-                    Ok(m) => m,
-                    // TODO(lazau): Maybe do some additional error processing here?
-                    Err(e) => {
-                        warn!("Failed to parse {}: {:?}.", message, e);
-                        return None;
-                    }
-                };
-                debug!("Request [{:?}].", m);
-                let mut connection = connection.lock().unwrap();
-                connection.process_irc_message(m)
-            })
-            .then(move |message| {
-                let messages = match connection_event.expect("connection RX cannot fail") {
-                    Message::Message(m) => m,
-                    Message::Event(e) => connection.lock().unwrap().process_system_event(e),
-                };
-                let mut result: Vec<String> = Vec::new();
-                // TODO(lazau): Perform 512 max line size here.
-                for mut m in messages {
-                    if m.prefix.is_none() {
-                        m.prefix = Some(shared_state_serialization.hostname.clone());
-                    }
-                    result.push(format!("{}", m));
-                }
-                future::ok::<Vec<String>, io::Error>(result)
-            })
-            .forward(multiplexed_sink)*/
-
     }
 
-    fn new(addr: SocketPair, shared_state: Arc<SharedState>, server: Arc<Mutex<Server>>) -> Self {
+    fn new(
+        addr: SocketPair,
+        shared_state: Arc<SharedState>,
+        server: Arc<Mutex<Server>>,
+        tx: ConnectionTX,
+    ) -> Self {
         // TODO(lazau): Resolve IP to fullname here.
         let hostname = addr.remote.ip().to_string();
         Connection {
             socket: addr,
             conn_type: ConnectionType::Registering(Registration::new(hostname)),
+            server: server,
             shared_state: shared_state,
-        }
-    }
-
-    fn get_registration(&self) -> &Registration {
-        match self.conn_type {
-            ConnectionType::Registering(ref r) => r,
-            _ => unreachable!(),
+            tx: tx,
         }
     }
 
     fn try_register(&mut self) -> Vec<IRCMessage> {
-        assert!(self.registered().is_none());
+        assert!(self.registered());
         let ident = if let ConnectionType::Registering(ref r) = self.conn_type {
             if r.nickname.is_none() || r.username.is_none() || r.realname.is_none() {
                 return Vec::new();
@@ -334,10 +221,81 @@ impl Connection {
             unreachable!()
         };
 
-        /*TXDestination::Server(vec![
-            ServerMessage::Register(ident.clone(), self.tx.clone()),
-        ])*/
-        Vec::new()
+        let nickname = ident.nickname.clone();
+        match self.server.lock().unwrap().add_user(
+            &ident,
+            self.tx.clone(),
+        ) {
+            Ok(_) => {
+                self.conn_type = ConnectionType::Client(User::new(
+                    &ident,
+                    Arc::clone(&self.shared_state),
+                    Arc::clone(&self.server),
+                    self.tx.clone(),
+                ));
+                vec![
+                    IRCMessage {
+                        prefix: None,
+                        command: Command::RPL_WELCOME(Responses::Welcome {
+                            nick: nickname.clone(),
+                            message: self.shared_state
+                                .template_engine
+                                .0
+                                .render(
+                                    templates::RPL_WELCOME_TEMPLATE_NAME,
+                                    &templates::Welcome {
+                                        network_name: &self.shared_state.configuration.network_name,
+                                        nick: &nickname,
+                                    },
+                                )
+                                .unwrap(),
+                        }),
+                    },
+                    IRCMessage {
+                        prefix: None,
+                        command: Command::RPL_YOURHOST(Responses::YourHost {
+                            nick: nickname.clone(),
+                            message: self.shared_state
+                                .template_engine
+                                .0
+                                .render(
+                                    templates::RPL_YOURHOST_TEMPLATE_NAME,
+                                    &templates::YourHost {
+                                        hostname: &self.shared_state.hostname,
+                                        version: &self.shared_state.configuration.version,
+                                    },
+                                )
+                                .unwrap(),
+                        }),
+                    },
+                    IRCMessage {
+                        prefix: None,
+                        command: Command::RPL_CREATED(Responses::Created {
+                            nick: nickname.clone(),
+                            message: self.shared_state
+                                .template_engine
+                                .0
+                                .render(
+                                    templates::RPL_CREATED_TEMPLATE_NAME,
+                                    &templates::Created {
+                                        created: &format!("{:?}", &self.shared_state.created),
+                                    },
+                                )
+                                .unwrap(),
+                        }),
+                    },
+                    IRCMessage {
+                        prefix: None,
+                        command: Command::RPL_MYINFO(Responses::MyInfo::default()),
+                    },
+                ]
+            }
+            Err(e) => {
+                error_resp!(Command::ERR_NICKNAMEINUSE(
+                    Responses::NICKNAMEINUSE { nick: nickname },
+                ))
+            }
+        }
     }
 
     fn add_registration_info(
@@ -383,11 +341,26 @@ impl Connection {
         });
     }
 
-    fn registered(&self) -> Option<&UserIdentifier> {
+    fn registered(&self) -> bool {
         match self.conn_type {
-            ConnectionType::Registering(_) => None,
-            ConnectionType::Client(ref u) => Some(u),
-            ConnectionType::Server => unimplemented!(),
+            ConnectionType::Registering(_) => false,
+            _ => true,
+        }
+    }
+
+    fn get_user(&self) -> &User {
+        assert!(self.registered());
+        match self.conn_type {
+            ConnectionType::Client(ref u) => u,
+            _ => unreachable!(),
+        }
+    }
+
+    fn get_user_mut(&mut self) -> &mut User {
+        assert!(self.registered());
+        match self.conn_type {
+            ConnectionType::Client(ref mut u) => u,
+            _ => unreachable!(),
         }
     }
 
@@ -396,7 +369,7 @@ impl Connection {
 
         macro_rules! verify_registered {
             () => {
-                if self.registered().is_none() {
+                if !self.registered() {
                     return error_resp!(Command::ERR_NOTREGISTERED(Responses::NOTREGISTERED::default()));
                 }
             }
@@ -406,7 +379,7 @@ impl Connection {
             Command::NICK(Requests::Nick { nickname: nick }) => {
                 // TODO(lazau): Validate nick based on
                 // https://tools.ietf.org/html/rfc2812#section-2.3.1.
-                if self.registered().is_some() {
+                if self.registered() {
                     unimplemented!()
                 } else {
                     self.add_registration_info(Some(nick.clone()), None, None);
@@ -420,10 +393,10 @@ impl Connection {
                               unused: _unused,
                               realname,
                           }) => {
-                if self.registered().is_some() {
-                    let user = self.registered().unwrap();
+                if self.registered() {
+                    let user = self.get_user();
                     return error_resp!(Command::ERR_ALREADYREGISTRED(
-                        Responses::AlreadyRegistered { nick: user.nickname.clone() },
+                        Responses::AlreadyRegistered { nick: user.nick().clone() },
                     ));
                 } else {
                     self.add_registration_info(None, Some(username), Some(realname));
@@ -448,67 +421,7 @@ impl Connection {
                         let nickname = ident.nickname.clone();
                         MultiplexedSink::add_user(&self.sink_map, &ident, tx);
                         self.conn_type = ConnectionType::Client(ident);
-                        vec![
-                            IRCMessage {
-                                prefix: None,
-                                command: Command::RPL_WELCOME(Responses::Welcome {
-                                    nick: nickname.clone(),
-                                    message: self.shared_state
-                                        .template_engine
-                                        .0
-                                        .render(
-                                            templates::RPL_WELCOME_TEMPLATE_NAME,
-                                            &templates::Welcome {
-                                                network_name: &self.shared_state
-                                                    .configuration
-                                                    .network_name,
-                                                nick: &nickname,
-                                            },
-                                        )
-                                        .unwrap(),
-                                }),
-                            },
-                            IRCMessage {
-                                prefix: None,
-                                command: Command::RPL_YOURHOST(Responses::YourHost {
-                                    nick: nickname.clone(),
-                                    message: self.shared_state
-                                        .template_engine
-                                        .0
-                                        .render(
-                                            templates::RPL_YOURHOST_TEMPLATE_NAME,
-                                            &templates::YourHost {
-                                                hostname: &self.shared_state.hostname,
-                                                version: &self.shared_state.configuration.version,
-                                            },
-                                        )
-                                        .unwrap(),
-                                }),
-                            },
-                            IRCMessage {
-                                prefix: None,
-                                command: Command::RPL_CREATED(Responses::Created {
-                                    nick: nickname.clone(),
-                                    message: self.shared_state
-                                        .template_engine
-                                        .0
-                                        .render(
-                                            templates::RPL_CREATED_TEMPLATE_NAME,
-                                            &templates::Created {
-                                                created: &format!(
-                                                    "{:?}",
-                                                    &self.shared_state.created
-                                                ),
-                                            },
-                                        )
-                                        .unwrap(),
-                                }),
-                            },
-                            IRCMessage {
-                                prefix: None,
-                                command: Command::RPL_MYINFO(Responses::MyInfo::default()),
-                            },
-                        ]
+                        
                     }
                     Err(server_error) => {
                         match server_error {
@@ -882,11 +795,9 @@ members: chan.nicks
 
     fn disconnect(&mut self) {
         debug!("{:#?} disconnecting.", self.socket);
-        if self.registered().is_some() {
-            /*let ident = self.registered().unwrap().identifier().clone();
-            send_log_err!(self.server_tx, ServerMessage::Disconnect(ident));*/
-            unimplemented!()
-            // TODO(lazau): Part all channels.
+        if self.registered() {
+            let user = self.get_user();
+            self.server.lock().unwrap().remove_user(user.identifier());
         }
     }
 }

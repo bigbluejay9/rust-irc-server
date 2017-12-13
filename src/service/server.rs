@@ -9,21 +9,6 @@ use super::connection::{Message as ConnectionMessage, ConnectionTX};
 use super::user::Identifier as UserIdentifier;
 use super::shared_state::SharedState;
 
-#[derive(Debug)]
-pub enum Message {
-    Register(UserIdentifier, ConnectionTX),
-    Join(
-        UserIdentifier,
-        ConnectionTX,
-        ChannelIdentifier,
-        /*Key*/
-        Option<String>
-    ),
-    Disconnect(UserIdentifier),
-}
-
-pub type ServerTX = mpsc::Sender<Message>;
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum ServerError {
     NickInUse,
@@ -40,55 +25,6 @@ pub struct Server {
     channels: HashMap<ChannelIdentifier, Channel>,
     shared_state: Arc<SharedState>,
 }
-
-/*macro_rules! send_log_err {
-    ($tx:expr, $message:expr) => {
-        match $tx.try_send($message) {
-            Err(e) => debug!("Send error: {:?}.", e),
-            _ =>{},
-        };
-    }
-}*/
-
-/*pub fn new(
-    shared_state: Arc<SharedState>,
-    thread_pool: CpuPool,
-) -> (ServerTX, Box<Future<Item = (), Error = ()>>) {
-    let (tx, rx) = mpsc::channel(shared_state.configuration.server_message_queue_length);
-    let server = Server {
-        users: Mutex::new(HashMap::new()),
-        channels: Mutex::new(HashMap::new()),
-        shared_state: shared_state,
-        tx: tx.clone(),
-        thread_pool: thread_pool.clone(),
-    };
-
-    let future = thread_pool.spawn_fn(move || {
-        rx.for_each(move |message| -> future::FutureResult<(), ()> {
-            debug!("Processing server message {:?}.", message);
-            match message {
-                Message::Register(user, mut tx) => {
-                    match server.add_user(&user, tx.clone()) {
-                        Ok(_) => {
-                            //send_log_err!(tx, ConnectionMessage::ServerRegistrationResult(None));
-                        }
-                        Err(e) => {
-                            //send_log_err!(tx, ConnectionMessage::ServerRegistrationResult(Some(e)));
-                        }
-                    }
-                }
-                Message::Join(user, connection_tx, channel, key) => {
-                    let msg = ChannelMessage::Join(user, connection_tx, key);
-                    send_log_err!(server.lookup_channel(channel), msg);
-                }
-                Message::Disconnect(user) => server.remove_user(&user),
-                _ => unimplemented!(),
-            };
-            future::ok(())
-        })
-    });
-    (tx, Box::new(future))
-}*/
 
 impl Server {
     pub fn new(shared_state: Arc<SharedState>) -> Self {
