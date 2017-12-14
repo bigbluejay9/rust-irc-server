@@ -15,7 +15,7 @@ use super::shared_state::SharedState;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct Identifier {
-    pub name: String,
+    name: String,
 }
 
 #[derive(Debug)]
@@ -30,6 +30,10 @@ pub struct Channel {
 impl Identifier {
     pub fn from_name(name: &String) -> Self {
         Self { name: name.clone() }
+    }
+
+    pub fn name(&self) -> &String {
+        &self.name
     }
 }
 
@@ -90,6 +94,12 @@ impl Channel {
 
     pub fn lookup_user_mut(&mut self, user: &UserIdentifier) -> Option<&mut ConnectionTX> {
         self.users.get_mut(user)
+    }
+
+    pub fn users<'a>(
+        &'a self,
+    ) -> std::collections::hash_map::Keys<'a, UserIdentifier, ConnectionTX> {
+        self.users.keys()
     }
 
     pub fn try_join(

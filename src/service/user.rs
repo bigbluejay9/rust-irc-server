@@ -4,10 +4,11 @@ use futures_cpupool::CpuPool;
 use std::{self, fmt, str};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use super::messages::Message as IRCMessage;
+use super::messages::commands::{Command, requests as Requests, responses as Responses};
 use super::connection::{Message as ConnectionMessage, ConnectionTX};
 use super::channel::{Identifier as ChannelIdentifier, ChannelError, Channel};
 use super::server::Server;
-use super::shared_state::SharedState;
 
 #[derive(Debug)]
 pub enum Message {
@@ -32,27 +33,41 @@ pub enum Message {
     //ServerRegistrationResult(Option<ServerError>),
 }
 
-pub type UserTX = mpsc::Sender<Message>;
-
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct Identifier {
-    pub nickname: String,
-    pub username: String,
-    pub realname: String,
-    pub hostname: String,
+    nickname: String,
+    username: String,
+    realname: String,
+    hostname: String,
 }
 
-#[derive(Debug)]
+impl Identifier {
+    pub fn new(nickname: String, username: String, realname: String, hostname: String) -> Self {
+        Self {
+            nickname,
+            username,
+            realname,
+            hostname,
+        }
+    }
+    pub fn nick(&self) -> &String {
+        &self.nickname
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub struct User {
     ident: Identifier,
     modes: HashSet<UserMode>,
+    #[serde(skip)]
     channels: HashSet<ChannelIdentifier>,
-    shared_state: Arc<SharedState>,
+    #[serde(skip)]
     server: Arc<Mutex<Server>>,
+    #[serde(skip)]
     tx: ConnectionTX,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize)]
 pub enum UserMode {
     Away,
     Invisible,
@@ -107,64 +122,12 @@ macro_rules! send_log_err {
     }
 }
 
-/*pub fn new(
-    ident: &Identifier,
-    shared_state: Arc<SharedState>,
-    connection_tx: ConnectionTX,
-    thread_pool: CpuPool,
-) -> UserTX {
-    let (tx, rx) = mpsc::channel(shared_state.configuration.user_message_queue_length);
-    let user = Arc::new(Mutex::new(User {
-        ident: ident.clone(),
-        shared_state: shared_state,
-        modes: HashSet::new(),
-        channels: HashSet::new(),
-        connection_tx: connection_tx,
-    }));
-
-    thread_pool
-        .spawn(rx.for_each(move |message| {
-            let mut user = user.lock().unwrap();
-            debug!("User {} processing {:?}.", user.identifier(), message);
-            match message {
-                /*Message::Join(user, tx, key) => {
-                    match channel.try_join(&user, tx, key) {
-                        Ok(tx) => {
-                            let msg = ConnectionMessage::ChannelJoin(Ok((
-                                channel.ident.clone(),
-                                channel.topic.clone(),
-                                channel.users.keys().cloned().collect(),
-                                channel.tx.clone(),
-                            )));
-                            send_log_err!(channel.lookup_user_mut(&user).unwrap(), msg);
-                        }
-                        Err((err, mut tx)) => {
-                            let msg =
-                                ConnectionMessage::ChannelJoin(Err((err, channel.ident.clone())));
-                            send_log_err!(tx, msg);
-                        }
-                    }
-                }*/
-                u @ _ => error!("{:?} not yet implemented!", u),
-            }
-            Ok(())
-        }))
-        .forget();
-    tx
-}*/
-
 impl User {
-    pub fn new(
-        ident: &Identifier,
-        shared_state: Arc<SharedState>,
-        server: Arc<Mutex<Server>>,
-        tx: ConnectionTX,
-    ) -> Self {
+    pub fn new(ident: &Identifier, server: Arc<Mutex<Server>>, tx: ConnectionTX) -> Self {
         Self {
             ident: ident.clone(),
             modes: HashSet::new(),
             channels: HashSet::new(),
-            shared_state: shared_state,
             server: server,
             tx: tx,
         }
@@ -178,7 +141,11 @@ impl User {
         &self.ident.nickname
     }
 
-    pub fn set_mode(&mut self, set: &SetMode, mode: &Vec<UserMode>) {
+    pub fn channels<'a>(&'a self) -> std::collections::hash_set::Iter<'a, ChannelIdentifier> {
+        self.channels.iter()
+    }
+
+    pub fn set_mode(&mut self, set: &SetMode, mode: &Vec<UserMode>) -> Vec<IRCMessage> {
         let mut modified = Vec::new();
         for m in mode.iter() {
             if match set {
@@ -189,7 +156,7 @@ impl User {
                 modified.push(m.clone());
             }
         }
-        debug!(
+        trace!(
             "{} mode is {}.",
             self.nick(),
             self.modes
@@ -199,13 +166,28 @@ impl User {
                 .join(",")
         );
 
-        if modified.len() > 0 {
-            /*let message = ConnectionMessage::UserModeChanged(
-                Arc::new((self.identifier().clone(), set.clone(), modified)),
-            );*/
-            // TODO(lazau): Should we broadcast to all Channels too?
-            //send_log_err!(self.connection_tx, message);
+        if modified.len() == 0 {
+            return Vec::new();
         }
+
+        let mut mode_string = String::new();
+        for m in modified {
+            mode_string = format!("{}{}", mode_string, m);
+        }
+        match set {
+            &SetMode::Add => mode_string = format!("+{}", mode_string),
+            &SetMode::Remove => mode_string = format!("-{}", mode_string),
+        };
+        vec![
+            IRCMessage {
+                prefix: None,
+                command: Command::MODE(Requests::Mode {
+                    target: self.nick().clone(),
+                    mode_string: Some(mode_string),
+                    mode_args: None,
+                }),
+            },
+        ]
     }
 }
 

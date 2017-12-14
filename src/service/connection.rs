@@ -15,8 +15,7 @@ use super::messages::commands::{Command, requests as Requests, responses as Resp
 use super::shared_state::SharedState;
 use super::channel::{Identifier as ChannelIdentifier, ChannelError, Channel};
 use super::server::{Server, ServerError};
-use super::user::{User, UserTX, Message as UserMessage, Identifier as UserIdentifier, UserMode,
-                  SetMode};
+use super::user::{User, Message as UserMessage, Identifier as UserIdentifier, UserMode, SetMode};
 use super::super::templates;
 use tokio_core;
 use tokio_io::AsyncRead;
@@ -39,7 +38,6 @@ enum ConnectionType {
 
 #[derive(Debug)]
 pub enum Message {
-    ServerRegistrationResult(Result<(UserIdentifier, UserTX), ServerError>),
 }
 
 pub type ConnectionTX = mpsc::Sender<Message>;
@@ -109,11 +107,14 @@ impl Connection {
         stream: tokio_core::net::TcpStream,
         shared_state: Arc<SharedState>,
         server: Arc<Mutex<Server>>,
-    ) -> Box<Future<Item = (), Error = io::Error>> {
+        connections: Arc<Mutex<HashMap<SocketPair, Arc<Mutex<Connection>>>>>,
+    ) -> Box<Future<Item = (), Error = ()> + std::marker::Send> {
         let socket = SocketPair {
             local: stream.local_addr().unwrap(),
             remote: stream.peer_addr().unwrap(),
         };
+
+        debug!("Accepting new connection {:?}.", socket);
         let (tx, rx) = mpsc::channel(shared_state.configuration.connection_message_queue_length);
         let connection = Arc::new(Mutex::new(Connection::new(
             socket.clone(),
@@ -121,8 +122,13 @@ impl Connection {
             server.clone(),
             tx,
         )));
+        connections.lock().unwrap().insert(
+            socket.clone(),
+            Arc::clone(&connection),
+        );
 
         let connection_cleanup = Arc::clone(&connection);
+        let connections_cleanup = Arc::clone(&connections);
         let shared_state_serialization = Arc::clone(&shared_state);
 
         let (sink, stream) = stream.framed(codec::Utf8CrlfCodec).split();
@@ -179,10 +185,18 @@ impl Connection {
             .forward(sink)
             .then(move |e: Result<(_, _), io::Error>| {
                 // ** Cleanup future.
-                let client = connection_cleanup.lock().unwrap().disconnect();
+                assert!(
+                    connections_cleanup
+                        .lock()
+                        .unwrap()
+                        .remove(&socket)
+                        .is_some()
+                );
+                connection_cleanup.lock().unwrap().disconnect();
                 if let Err(e) = e {
                     warn!("Connection error: {:?}.", e);
                 }
+                debug!("Dropping connection {:?}.", socket);
                 Ok(())
             });
         Box::new(fut)
@@ -206,33 +220,30 @@ impl Connection {
     }
 
     fn try_register(&mut self) -> Vec<IRCMessage> {
-        assert!(self.registered());
+        assert!(!self.registered());
         let ident = if let ConnectionType::Registering(ref r) = self.conn_type {
             if r.nickname.is_none() || r.username.is_none() || r.realname.is_none() {
                 return Vec::new();
             }
-            UserIdentifier {
-                nickname: r.nickname.as_ref().unwrap().clone(),
-                username: r.username.as_ref().unwrap().clone(),
-                realname: r.realname.as_ref().unwrap().clone(),
-                hostname: self.socket.remote.ip().to_string(),
-            }
+            UserIdentifier::new(
+                r.nickname.as_ref().unwrap().clone(),
+                r.username.as_ref().unwrap().clone(),
+                r.realname.as_ref().unwrap().clone(),
+                r.hostname.clone(),
+            )
         } else {
             unreachable!()
         };
 
-        let nickname = ident.nickname.clone();
+        let nickname = ident.nick().clone();
         match self.server.lock().unwrap().add_user(
             &ident,
             self.tx.clone(),
         ) {
             Ok(_) => {
-                self.conn_type = ConnectionType::Client(User::new(
-                    &ident,
-                    Arc::clone(&self.shared_state),
-                    Arc::clone(&self.server),
-                    self.tx.clone(),
-                ));
+                self.conn_type = ConnectionType::Client(
+                    User::new(&ident, Arc::clone(&self.server), self.tx.clone()),
+                );
                 vec![
                     IRCMessage {
                         prefix: None,
@@ -341,14 +352,14 @@ impl Connection {
         });
     }
 
-    fn registered(&self) -> bool {
+    pub fn registered(&self) -> bool {
         match self.conn_type {
             ConnectionType::Registering(_) => false,
             _ => true,
         }
     }
 
-    fn get_user(&self) -> &User {
+    pub fn get_user(&self) -> &User {
         assert!(self.registered());
         match self.conn_type {
             ConnectionType::Client(ref u) => u,
@@ -376,6 +387,93 @@ impl Connection {
         }
 
         match req.command {
+            Command::JOIN(Requests::Join { join: jt }) => {
+                verify_registered!();
+                match jt {
+                    Requests::JoinChannels::PartAll => {
+                        /*connection.server.lock().unwrap().part_all(
+                                user.identifier(),
+                                None,
+                                );*/
+                        unimplemented!()
+                    }
+                    Requests::JoinChannels::Channels(r) => {
+                        /*let ident = self.registered().unwrap().identifier().clone();
+                        for chan in r {
+                            let msg = ServerMessage::Join(
+                                ident.clone(),
+                                self.tx.clone(),
+                                ChannelIdentifier::from_name(&chan),
+                                None,
+                            );
+                            send_log_err!(self.server_tx, msg);
+                        }*/
+                    }
+                    Requests::JoinChannels::KeyedChannels(r) => {
+                        unimplemented!()
+                        /*let (chans, keys): (Vec<String>, Vec<String>) = r.into_iter().unzip();
+                        connection.server.lock().unwrap().join(
+                                user.identifier(),
+                                chans
+                                .iter()
+                                .zip(keys.iter().map(|k| Some(k)))
+                                .collect(),
+                                );*/
+                    }
+                }
+                Vec::new()
+            }
+
+            Command::MODE(Requests::Mode {
+                              target,
+                              mode_string,
+                              mode_args,
+                          }) => {
+                verify_registered!();
+                // MODE query.
+                if mode_string.is_none() {
+                    unimplemented!();
+                }
+
+                // MODE adjustment.
+                let user = self.get_user_mut();
+                if &target != user.nick() {
+                    return error_resp!(Command::ERR_USERSDONTMATCH(
+                        Responses::UsersDontMatch { nick: user.nick().clone() },
+                    ));
+                }
+                let mode = mode_string.unwrap();
+                if mode.len() < 2 {
+                    return error_resp!(Command::ERR_UMODEUNKNOWNFLAG(
+                        Responses::UModeUnknownFlag { nick: user.nick().clone() },
+                    ));
+                }
+                let set = if mode.starts_with("+") {
+                    SetMode::Add
+                } else if mode.starts_with("-") {
+                    SetMode::Remove
+                } else {
+                    return error_resp!(Command::ERR_UMODEUNKNOWNFLAG(
+                        Responses::UModeUnknownFlag { nick: user.nick().clone() },
+                    ));
+                };
+
+                let mut modes = Vec::new();
+                for c in mode.chars().skip(1) {
+                    match c.to_string().parse::<UserMode>() {
+                        Err(e) => {
+                            debug!("Failed to parse mode '{}': {:?}.", c, e);
+                            return error_resp!(Command::ERR_UMODEUNKNOWNFLAG(
+                                Responses::UModeUnknownFlag { nick: user.nick().clone() },
+                            ));
+                        }
+                        Ok(m) => modes.push(m),
+                    };
+                }
+
+                user.set_mode(&set, &modes)
+            }
+
             Command::NICK(Requests::Nick { nickname: nick }) => {
                 // TODO(lazau): Validate nick based on
                 // https://tools.ietf.org/html/rfc2812#section-2.3.1.
@@ -385,6 +483,22 @@ impl Connection {
                     self.add_registration_info(Some(nick.clone()), None, None);
                     self.try_register()
                 }
+            }
+
+            Command::PING(Requests::Ping { originator, target }) => {
+                if target.is_some() && target.unwrap() != self.shared_state.hostname {
+                    // Forward to another server.
+                    unimplemented!();
+                }
+                vec![
+                    IRCMessage {
+                        prefix: None,
+                        command: Command::PONG(Requests::Pong {
+                            originator: self.shared_state.hostname.clone(),
+                            target: None,
+                        }),
+                    },
+                ]
             }
 
             Command::USER(Requests::User {
@@ -421,7 +535,7 @@ impl Connection {
                         let nickname = ident.nickname.clone();
                         MultiplexedSink::add_user(&self.sink_map, &ident, tx);
                         self.conn_type = ConnectionType::Client(ident);
-                        
+
                     }
                     Err(server_error) => {
                         match server_error {
@@ -491,78 +605,6 @@ impl Connection {
                         &message,
                         );
                 Vec::new()*/
-            }
-
-            Command::MODE(Requests::Mode {
-                              target,
-                              mode_string,
-                              mode_args,
-                          }) => {
-                verify_registered!();
-                // MODE query.
-                if mode_string.is_none() {
-                    unimplemented!();
-                }
-
-                // MODE adjustment.
-                let user = self.registered_mut().unwrap();
-                if &target != user.nick() {
-                    return_error_resp!(Command::ERR_USERSDONTMATCH(
-                        Responses::UsersDontMatch { nick: user.nick().clone() },
-                    ));
-                }
-                let mode = mode_string.unwrap();
-                if mode.len() < 2 {
-                    return_error_resp!(Command::ERR_UMODEUNKNOWNFLAG(
-                        Responses::UModeUnknownFlag { nick: user.nick().clone() },
-                    ));
-                }
-                let set = if mode.starts_with("+") {
-                    SetMode::Add
-                } else if mode.starts_with("-") {
-                    SetMode::Remove
-                } else {
-                    return_error_resp!(Command::ERR_UMODEUNKNOWNFLAG(
-                        Responses::UModeUnknownFlag { nick: user.nick().clone() },
-                    ));
-                };
-
-                let mut modes = Vec::new();
-                for c in mode.chars().skip(1) {
-                    match c.to_string().parse::<UserMode>() {
-                        Err(e) => {
-                            return_error_resp!(Command::ERR_UMODEUNKNOWNFLAG(
-                                Responses::UModeUnknownFlag { nick: user.nick().clone() },
-                            ));
-                        }
-                        Ok(m) => modes.push(m),
-                    };
-                }
-
-                user.set_mode(&set, &modes);
-                Vec::new()
-
-            }
-
-            Command::PING(Requests::Ping { originator, target }) => {
-                if target.is_some() && target.unwrap() != self.shared_state.hostname {
-                    // Forward to another server.
-                    unimplemented!();
-                }
-                vec![
-                    IRCMessage {
-                        prefix: None,
-                        command: Command::PONG(Requests::Pong {
-                            originator: self.shared_state.hostname.clone(),
-                            target: None,
-                        }),
-                    },
-                ]
-            }
-
-            u @ _ => {
-                error!("Response to {:?} not yet implemented.", u);
-                Vec::new()
             }
         }
     }

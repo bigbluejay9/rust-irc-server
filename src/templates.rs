@@ -1,26 +1,35 @@
-use serde::ser;
-
 pub static DEBUG_TEMPLATE_NAME: &'static str = "debug_html_template";
 pub static DEBUG_HTML_TEMPLATE: &'static str = "
 <!doctype html>
 <html lang=\"en\">
 <head>
   <meta charset=\"utf-8\">
-  <title>IRC Server State</title>
+  <title>IRC Server Debug Portal</title>
 </head>
 <body>
 
+<div id=\"TableOfContents\">
+<h2>Table Of Contents</h2>
+<ul>
+  <li><a href=\"#Server\">Server</a></li>
+  <li><a href=\"#Channels\">Channels</a></li>
+  <li><a href=\"#Users\">Users</a></li>
+</ul>
+</div>
+
 <div id=\"Server\">
-<h2>Server</h2>
+<h2>Server Wide State</h2>
+{{#if configuration.0}}<b style=\"color:green\">Default Configuration</b>{{/if}}
 <pre>
-{{configuration}}
+{{configuration.1}}
 </pre>
 </div>
 
 <div id=\"Channels\">
+<h2>Channels</h2>
 <table>
   <tr>
-    <th>Channel Name</th>
+    <th>Name</th>
     <th>Members</th>
   </tr>
   {{#each channels_to_nicks}}
@@ -29,7 +38,7 @@ pub static DEBUG_HTML_TEMPLATE: &'static str = "
     <td>
       <ul>
         {{#each this}}
-        <li>{{this}}</li>
+        <li><a href=\"#{{this.1}}\">{{this.0}}</a></li>
         {{/each}}
       </ul>
     </td>
@@ -38,35 +47,44 @@ pub static DEBUG_HTML_TEMPLATE: &'static str = "
 </table>
 </div>
 
-<div id=\"Nicks\">
+<div id=\"Users\">
+<h2>Users</h2>
 <table>
   <tr>
-    <th>Known Nicks</th>
+    <th>Nick</th>
+    <th>User Data</th>
+    <th>Channels</th>
   </tr>
-  {{#each nick_to_connections}}
+  {{#each user_to_channels}}
   <tr>
-    <td><a href=\"#{{this}}\">{{@key}}</a></td>
+    <td><a href=\"#{{this.1}}\">{{@key}}</a></td>
+    <td><pre>{{this.0}}</pre></td>
+    <td>
+      <ul>
+      {{#each this.2}}
+        <li><a href=\"#{{this.1}}\">{{this.0}}</a></li>
+      {{/each}}
+      </ul>
+    </td>
   </tr>
   {{/each}}
 </table>
 </div>
 
 <div id=\"Connections\">
+<h2>Connections</h2>
 <table>
   <tr>
-    <th>Socket Pair</th>
-    <th>Connection Data</th>
+    <th>Socket</th>
+    <th>Nick</th>
   </tr>
-{{#each connections}}
-  <tr{{#if this.0.0}} id=\"{{this.0.1}}\"{{/if}}>
+  {{#each connections}}
+  <tr>
     <td>{{@key}}</td>
-    <td>
-    <pre>
-{{this.1}}
-    </pre>
-    </td>
+    <td>{{#if this.0}}<a href=\"#{{this.1.1}}\">{{this.1.0}}</a>
+    {{else}}<b style=\"color:red\">Not registered.</b>{{/if}}</td>
   </tr>
-{{/each}}
+  {{/each}}
 </table>
 </div>
 

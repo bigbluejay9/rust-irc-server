@@ -81,6 +81,18 @@ impl Server {
         self.channels.get(&channel).unwrap()
     }
 
+    pub fn channels<'a>(
+        &'a self,
+    ) -> std::collections::hash_map::Iter<'a, ChannelIdentifier, Channel> {
+        self.channels.iter()
+    }
+
+    pub fn users<'a>(
+        &'a self,
+    ) -> std::collections::hash_map::Keys<'a, UserIdentifier, ConnectionTX> {
+        self.users.keys()
+    }
+
     /*pub fn join(&mut self, user: &UserIdentifier, channels: Vec<(&String, Option<&String>)>) {
         let tx = self.users.get(user).unwrap().clone();
         for &(channel_name, key) in channels.iter() {
