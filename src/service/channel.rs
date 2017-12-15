@@ -22,7 +22,7 @@ pub struct Identifier {
 pub struct Channel {
     ident: Identifier,
     topic: Option<String>,
-    users: HashMap<UserIdentifier, ConnectionTX>,
+    users: HashSet<UserIdentifier>,
     banned: HashSet<UserIdentifier>,
     key: Option<String>,
 }
@@ -70,11 +70,11 @@ pub enum ChannelError {
 }
 
 impl Channel {
-    pub fn new(ident: &Identifier, shared_state: Arc<SharedState>) -> Self {
+    pub fn new(ident: Identifier, shared_state: Arc<SharedState>) -> Self {
         Self {
-            ident: ident.clone(),
+            ident: ident,
             topic: None,
-            users: HashMap::new(),
+            users: HashSet::new(),
             banned: HashSet::new(),
             key: None,
         }
@@ -88,36 +88,43 @@ impl Channel {
         &self.ident
     }
 
-    pub fn verify_key(&self, key: Option<String>) -> bool {
-        self.key.as_ref() == key.as_ref()
+    pub fn topic(&self) -> &Option<String> {
+        &self.topic
     }
 
-    pub fn lookup_user_mut(&mut self, user: &UserIdentifier) -> Option<&mut ConnectionTX> {
+    pub fn verify_key(&self, key: Option<&String>) -> bool {
+        self.key.as_ref() == key
+    }
+
+    /*pub fn lookup_user_mut(&mut self, user: &UserIdentifier) -> Option<&mut ConnectionTX> {
         self.users.get_mut(user)
+    }*/
+
+    pub fn users<'a>(&'a self) -> std::collections::hash_set::Iter<'a, UserIdentifier> {
+        self.users.iter()
     }
 
-    pub fn users<'a>(
-        &'a self,
-    ) -> std::collections::hash_map::Keys<'a, UserIdentifier, ConnectionTX> {
-        self.users.keys()
-    }
-
-    pub fn try_join(
+    pub fn join(
         &mut self,
         user: &UserIdentifier,
-        tx: ConnectionTX,
-        key: Option<String>,
-    ) -> Result<(), (ChannelError, ConnectionTX)> {
+        key: Option<&String>,
+    ) -> Result<(), ChannelError> {
         if !self.verify_key(key) {
-            return Err((ChannelError::BadKey, tx));
+            return Err(ChannelError::BadKey);
         }
+
         if self.banned.contains(user) {
-            return Err((ChannelError::Banned, tx));
+            return Err(ChannelError::Banned);
         }
-        if self.users.contains_key(user) {
-            return Err((ChannelError::AlreadyMember, tx));
+
+        if self.users.contains(user) {
+            return Err(ChannelError::AlreadyMember);
         }
-        self.users.insert(user.clone(), tx);
+
+        //self.broadcast
+        self.users.insert(user.clone());
         Ok(())
     }
+
+    //pub fn broadcast(&self,
 }

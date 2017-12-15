@@ -4,7 +4,7 @@ use futures_cpupool::CpuPool;
 use std;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use super::channel::{Channel, Identifier as ChannelIdentifier};
+use super::channel::{Channel, Identifier as ChannelIdentifier, ChannelError};
 use super::connection::{Message as ConnectionMessage, ConnectionTX};
 use super::user::Identifier as UserIdentifier;
 use super::shared_state::SharedState;
@@ -70,15 +70,9 @@ impl Server {
         Ok(())
     }
 
-    pub fn lookup_channel(&mut self, channel: &ChannelIdentifier) -> &Channel {
+    pub fn lookup_channel(&mut self, channel: &ChannelIdentifier) -> Option<&Channel> {
         debug!("Looking up channel: {:?}.", channel);
-        if !self.channels.contains_key(&channel) {
-            self.channels.insert(
-                channel.clone(),
-                Channel::new(channel, Arc::clone(&self.shared_state)),
-            );
-        }
-        self.channels.get(&channel).unwrap()
+        self.channels.get(&channel)
     }
 
     pub fn channels<'a>(
@@ -93,43 +87,35 @@ impl Server {
         self.users.keys()
     }
 
-    /*pub fn join(&mut self, user: &UserIdentifier, channels: Vec<(&String, Option<&String>)>) {
-        let tx = self.users.get(user).unwrap().clone();
+    pub fn join(
+        &mut self,
+        user: &UserIdentifier,
+        channels: Vec<(&String, Option<&String>)>,
+    ) -> Vec<Result<(Option<String>, Vec<UserIdentifier>), (ChannelIdentifier, ChannelError)>> {
+        let mut result = Vec::new();
         for &(channel_name, key) in channels.iter() {
-            if !self.channels.contains_key(channel_name) {
+            let ident = ChannelIdentifier::from_name(channel_name);
+            if !self.channels.contains_key(&ident) {
                 self.channels.insert(
-                    channel_name.clone(),
-                    Channel::new(channel_name),
+                    ident.clone(),
+                    Channel::new(ident.clone(), Arc::clone(&self.shared_state)),
                 );
             }
-            let mut channel = self.channels.get_mut(channel_name).unwrap();
-
-            if !channel.verify_key(key) {
-                error!("Cannot join {:?}: wrong key.", channel);
-                continue;
-            }
-
-            if channel.users.insert(user.clone(), tx.clone()).is_none() {
-                // TODO(permission checks and all that).
-                let msg = Arc::new(Broadcast::Join(user.clone(), channel.name.clone()));
-                let mut dropped = Vec::new();
-                for (user, tx) in channel.users.iter() {
-                    if let Err(ref e) = tx.borrow_mut().try_send(Arc::clone(&msg)) {
-                        if e.is_disconnected() {
-                            dropped.push(user.clone());
-                        }
-                    }
+            let channel = self.channels.get_mut(&ident).unwrap();
+            match channel.join(user, key) {
+                Ok(_) => {
+                    result.push(Ok((
+                        channel.topic().clone(),
+                        channel.users().cloned().collect(),
+                    )))
                 }
-                for d in dropped {
-                    channel.users.remove(&d);
-                }
-            } else {
-                trace!("User {:?} already in channel {}.", user, channel_name);
-            }
+                Err(e) => result.push(Err((ident.clone(), e))),
+            };
         }
+        result
     }
 
-    pub fn part(
+    /*pub fn part(
         &mut self,
         user: &UserIdentifier,
         channels: &Vec<String>,

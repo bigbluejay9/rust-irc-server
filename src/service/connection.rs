@@ -381,7 +381,8 @@ impl Connection {
         macro_rules! verify_registered {
             () => {
                 if !self.registered() {
-                    return error_resp!(Command::ERR_NOTREGISTERED(Responses::NOTREGISTERED::default()));
+                    return error_resp!(
+                    Command::ERR_NOTREGISTERED(Responses::NOTREGISTERED::default()));
                 }
             }
         }
@@ -398,6 +399,20 @@ impl Connection {
                         unimplemented!()
                     }
                     Requests::JoinChannels::Channels(r) => {
+                        let joined = {
+                            let user = self.get_user();
+                            self.server.lock().unwrap().join(
+                                user.identifier(),
+                                r.iter()
+                                    .map(|k| (k, None))
+                                    .collect(),
+                            )
+                        };
+                        let user = self.get_user().identifier();
+                        joined
+                            .into_iter()
+                            .flat_map(|res| Connection::produce_join_messages(user, res))
+                            .collect()
                         /*let ident = self.registered().unwrap().identifier().clone();
                         for chan in r {
                             let msg = ServerMessage::Join(
@@ -421,7 +436,6 @@ impl Connection {
                                 );*/
                     }
                 }
-                Vec::new()
             }
 
             Command::MODE(Requests::Mode {
@@ -553,6 +567,38 @@ impl Connection {
                     }
                 }
             }*/
+        }
+    }
+
+    fn produce_join_messages(
+        user: &UserIdentifier,
+        res: Result<(Option<String>, Vec<UserIdentifier>), (ChannelIdentifier, ChannelError)>,
+    ) -> Vec<IRCMessage> {
+        match res {
+            Ok((topic, users)) => Vec::new(),
+            Err((ident, e)) => {
+                match e {
+                    ChannelError::BadKey => {
+                        error_resp!(Command::ERR_BADCHANNELKEY(Responses::BadChannelKey {
+                            nick: user.nick().clone(),
+                            channel: ident.name().clone(),
+                        }))
+                    }
+                    ChannelError::Banned => {
+                        error_resp!(Command::ERR_BANNEDFROMCHAN(Responses::BannedFromChan {
+                            nick: user.nick().clone(),
+                            channel: ident.name().clone(),
+                        }))
+                    }
+                    ChannelError::AlreadyMember => {
+                        warn!(
+                            "{:?} trying to join a channel I'm already a member of.",
+                            user
+                        );
+                        Vec::new()
+                    }
+                }
+            }
         }
     }
 
