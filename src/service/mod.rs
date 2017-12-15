@@ -79,7 +79,6 @@ pub fn start(configuration: Arc<configuration::Configuration>) {
             let shared_state = Arc::clone(&shared_state);
             let srv = Arc::clone(&srv);
             let connections = Arc::clone(&connections);
-            debug!("Hello?");
             lis_handle.spawn(thread_pool.spawn(
                 connection::Connection::handle_new_connection(
                     stream,

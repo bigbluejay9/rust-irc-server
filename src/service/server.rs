@@ -91,7 +91,7 @@ impl Server {
         &mut self,
         user: &UserIdentifier,
         channels: Vec<(&String, Option<&String>)>,
-    ) -> Vec<Result<(Option<String>, Vec<UserIdentifier>), (ChannelIdentifier, ChannelError)>> {
+    ) -> Vec<Result<(Option<String>, Vec<UserIdentifier>), ChannelError>> {
         let mut result = Vec::new();
         for &(channel_name, key) in channels.iter() {
             let ident = ChannelIdentifier::from_name(channel_name);
@@ -109,7 +109,7 @@ impl Server {
                         channel.users().cloned().collect(),
                     )))
                 }
-                Err(e) => result.push(Err((ident.clone(), e))),
+                Err(e) => result.push(Err(e)),
             };
         }
         result

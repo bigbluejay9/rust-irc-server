@@ -53,6 +53,9 @@ impl Identifier {
     pub fn nick(&self) -> &String {
         &self.nickname
     }
+    pub fn into_nick(self) -> String {
+        self.nickname
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -139,6 +142,10 @@ impl User {
 
     pub fn nick(&self) -> &String {
         &self.ident.nickname
+    }
+
+    pub fn join(&mut self, channel: &ChannelIdentifier) {
+        assert!(self.channels.insert(channel.clone()));
     }
 
     pub fn channels<'a>(&'a self) -> std::collections::hash_set::Iter<'a, ChannelIdentifier> {

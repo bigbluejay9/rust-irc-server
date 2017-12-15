@@ -141,7 +141,7 @@ impl Connection {
             }))
             .then(move |event| {
                 // ** Process future.
-                trace!("Connection event: {:?}.", event);
+                debug!("Connection event: {:?}.", event);
                 if event.is_err() {
                     let err = event.err().unwrap();
                     error!("Unexpected upstream error: {:?}.", err);
@@ -180,6 +180,7 @@ impl Connection {
                     // TODO(lazau): Convert serialization error to future::err.
                     result.push(format!("{}", m));
                 }
+                debug!("Response: {:?}.", result);
                 future::ok(result)
             })
             .forward(sink)
@@ -408,32 +409,47 @@ impl Connection {
                                     .collect(),
                             )
                         };
-                        let user = self.get_user().identifier();
+                        let user = self.get_user_mut();
                         joined
                             .into_iter()
-                            .flat_map(|res| Connection::produce_join_messages(user, res))
+                            .zip(r.iter())
+                            .flat_map(|(res, channel_name)| {
+                                if res.is_ok() {
+                                    user.join(&ChannelIdentifier::from_name(channel_name));
+                                }
+                                Connection::produce_join_messages(
+                                    user.identifier(),
+                                    channel_name,
+                                    res,
+                                )
+                            })
                             .collect()
-                        /*let ident = self.registered().unwrap().identifier().clone();
-                        for chan in r {
-                            let msg = ServerMessage::Join(
-                                ident.clone(),
-                                self.tx.clone(),
-                                ChannelIdentifier::from_name(&chan),
-                                None,
-                            );
-                            send_log_err!(self.server_tx, msg);
-                        }*/
                     }
                     Requests::JoinChannels::KeyedChannels(r) => {
-                        unimplemented!()
-                        /*let (chans, keys): (Vec<String>, Vec<String>) = r.into_iter().unzip();
-                        connection.server.lock().unwrap().join(
+                        let joined = {
+                            let user = self.get_user();
+                            self.server.lock().unwrap().join(
                                 user.identifier(),
-                                chans
-                                .iter()
-                                .zip(keys.iter().map(|k| Some(k)))
-                                .collect(),
-                                );*/
+                                r.iter()
+                                    .map(|&(ref name, ref key)| (name, Some(key)))
+                                    .collect(),
+                            )
+                        };
+                        let user = self.get_user_mut();
+                        joined
+                            .into_iter()
+                            .zip(r.into_iter())
+                            .flat_map(|(res, (channel_name, _))| {
+                                if res.is_ok() {
+                                    user.join(&ChannelIdentifier::from_name(&channel_name));
+                                }
+                                Connection::produce_join_messages(
+                                    user.identifier(),
+                                    &channel_name,
+                                    res,
+                                )
+                            })
+                            .collect()
                     }
                 }
             }
@@ -572,22 +588,56 @@ impl Connection {
 
     fn produce_join_messages(
         user: &UserIdentifier,
-        res: Result<(Option<String>, Vec<UserIdentifier>), (ChannelIdentifier, ChannelError)>,
+        channel_name: &String,
+        res: Result<(Option<String>, Vec<UserIdentifier>), ChannelError>,
     ) -> Vec<IRCMessage> {
         match res {
-            Ok((topic, users)) => Vec::new(),
-            Err((ident, e)) => {
+            Ok((topic, users)) => {
+                let mut result = Vec::new();
+                result.push(IRCMessage {
+                    prefix: Some(user.as_prefix()),
+                    command: Command::JOIN(Requests::Join {
+                        join: Requests::JoinChannels::Channels(vec![channel_name.clone()]),
+                    }),
+                });
+                if let Some(topic) = topic {
+                    result.push(IRCMessage {
+                        prefix: None,
+                        command: Command::RPL_TOPIC(Responses::Topic {
+                            nick: user.nick().clone(),
+                            channel: channel_name.clone(),
+                            topic: topic,
+                        }),
+                    });
+                }
+                let mut members = Vec::with_capacity(users.len() + 1);
+                members.push(("".to_string(), user.nick().clone()));
+                result.push(IRCMessage {
+                    prefix: None,
+                    command: Command::RPL_NAMREPLY(Responses::NamReply {
+                        nick: user.nick().clone(),
+                        symbol: "=".to_string(), //FIXME
+                        channel: channel_name.clone(),
+                        members: users.into_iter().fold(members, |mut mem, u| {
+                            mem.push(("".to_string(), u.into_nick()));
+                            mem
+                        }),
+                    }),
+                });
+                result
+            }
+            Err(e) => {
                 match e {
                     ChannelError::BadKey => {
                         error_resp!(Command::ERR_BADCHANNELKEY(Responses::BadChannelKey {
                             nick: user.nick().clone(),
-                            channel: ident.name().clone(),
+                            channel: channel_name.clone(),
                         }))
                     }
                     ChannelError::Banned => {
                         error_resp!(Command::ERR_BANNEDFROMCHAN(Responses::BannedFromChan {
                             nick: user.nick().clone(),
-                            channel: ident.name().clone(),
+                            channel: channel_name.clone(),
                         }))
                     }
                     ChannelError::AlreadyMember => {
