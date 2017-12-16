@@ -382,8 +382,15 @@ impl fmt::Display for Join {
 
 impl fmt::Display for Part {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "PART");
-        unimplemented!()
+        assert!(
+            self.channels.len() == 1,
+            "Server can only write PART messages with one channel."
+        );
+        write!(f, "PART {}", self.channels[0])?;
+        if let Some(ref m) = self.message {
+            write!(f, " :{}", m)?;
+        }
+        Ok(())
     }
 }
 

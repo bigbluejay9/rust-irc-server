@@ -1,11 +1,8 @@
-use futures::*;
-use futures::sync::mpsc;
-use futures_cpupool::CpuPool;
 use std;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use super::channel::{Channel, Identifier as ChannelIdentifier, ChannelError};
-use super::connection::{Message as ConnectionMessage, ConnectionTX};
+use super::connection::ConnectionTX;
 use super::user::Identifier as UserIdentifier;
 use super::shared_state::SharedState;
 
@@ -13,6 +10,8 @@ use super::shared_state::SharedState;
 pub enum ServerError {
     NickInUse,
     UnknownUser,
+    NoSuchChannel,
+    NotOnChannel,
     Other,
 }
 
@@ -81,6 +80,10 @@ impl Server {
         self.channels.iter()
     }
 
+    fn lookup_user(&self, user: &UserIdentifier) -> Option<&ConnectionTX> {
+        self.users.get(user)
+    }
+
     pub fn users<'a>(
         &'a self,
     ) -> std::collections::hash_map::Keys<'a, UserIdentifier, ConnectionTX> {
@@ -90,10 +93,11 @@ impl Server {
     pub fn join(
         &mut self,
         user: &UserIdentifier,
-        channels: Vec<(&String, Option<&String>)>,
+        channels: &Vec<(String, Option<String>)>,
     ) -> Vec<Result<(Option<String>, Vec<UserIdentifier>), ChannelError>> {
-        let mut result = Vec::new();
-        for &(channel_name, key) in channels.iter() {
+        let mut result = Vec::with_capacity(channels.len());
+        let tx = self.lookup_user(user).unwrap().clone();
+        for &(ref channel_name, ref key) in channels.iter() {
             let ident = ChannelIdentifier::from_name(channel_name);
             if !self.channels.contains_key(&ident) {
                 self.channels.insert(
@@ -102,7 +106,7 @@ impl Server {
                 );
             }
             let channel = self.channels.get_mut(&ident).unwrap();
-            match channel.join(user, key) {
+            match channel.join(user, &tx, key) {
                 Ok(_) => {
                     result.push(Ok((
                         channel.topic().clone(),
@@ -115,50 +119,29 @@ impl Server {
         result
     }
 
-    /*pub fn part(
+    pub fn part(
         &mut self,
         user: &UserIdentifier,
         channels: &Vec<String>,
         message: &Option<String>,
-    ) {
-        let tx = self.users.get(user).unwrap().clone();
-        for c in channels.iter() {
-            let chan = self.channels.get_mut(c);
-            if chan.is_none() {
-                warn!("Trying to part non-existant channel {}", c);
-                continue;
-            }
-            let mut chan = chan.unwrap();
-            if !chan.users.remove(user).is_some() {
-                trace!(
-                    "{:?} cannot part channel {} they're not a member of.",
-                    user,
-                    c
-                );
+    ) -> Vec<Result<(), ServerError>> {
+        let mut result = Vec::with_capacity(channels.len());
+        for c in channels {
+            let ident = ChannelIdentifier::from_name(c);
+            if !self.channels.contains_key(&ident) {
+                result.push(Err(ServerError::NoSuchChannel));
                 continue;
             }
 
-            let msg = Arc::new(Broadcast::Part(
-                user.clone(),
-                chan.name.clone(),
-                message.clone(),
-            ));
-            let mut dropped = Vec::new();
-            for (user, tx) in chan.users.iter() {
-                if let Err(ref e) = tx.borrow_mut().try_send(Arc::clone(&msg)) {
-                    if e.is_disconnected() {
-                        dropped.push(user.clone());
-                    }
-                }
+            let channel = self.channels.get_mut(&ident).unwrap();
+            if !channel.has_user(user) {
+                result.push(Err(ServerError::NotOnChannel));
+                continue;
             }
-            for d in dropped {
-                chan.users.remove(&d);
-            }
-            send_to_user!(user, tx, Arc::clone(&msg));
+
+            channel.part(user, message);
+            result.push(Ok(()));
         }
+        result
     }
-
-    pub fn part_all(&mut self, user: &UserIdentifier, message: Option<&String>) {
-        //unimplemented!()
-    }*/
 }

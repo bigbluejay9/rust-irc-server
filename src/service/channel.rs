@@ -1,17 +1,14 @@
 use futures::*;
-use futures::sync::mpsc;
-use futures_cpupool::CpuPool;
-
 use serde::ser::{self, SerializeSeq};
-
 use std;
 use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
-
-use super::user::Identifier as UserIdentifier;
-use super::connection::{ConnectionTX, Message as ConnectionMessage};
+use super::connection::{ConnectionTX, Event};
+use super::messages::Message as IRCMessage;
+use super::messages::commands::{Command, requests as Requests};
 use super::shared_state::SharedState;
+use super::user::Identifier as UserIdentifier;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct Identifier {
@@ -22,9 +19,10 @@ pub struct Identifier {
 pub struct Channel {
     ident: Identifier,
     topic: Option<String>,
-    users: HashSet<UserIdentifier>,
+    users: HashMap<UserIdentifier, ConnectionTX>,
     banned: HashSet<UserIdentifier>,
     key: Option<String>,
+    shared_state: Arc<SharedState>,
 }
 
 impl Identifier {
@@ -74,9 +72,10 @@ impl Channel {
         Self {
             ident: ident,
             topic: None,
-            users: HashSet::new(),
+            users: HashMap::new(),
             banned: HashSet::new(),
             key: None,
+            shared_state: shared_state,
         }
     }
 
@@ -92,22 +91,25 @@ impl Channel {
         &self.topic
     }
 
-    pub fn verify_key(&self, key: Option<&String>) -> bool {
-        self.key.as_ref() == key
+    pub fn verify_key(&self, key: &Option<String>) -> bool {
+        &self.key == key
     }
 
-    /*pub fn lookup_user_mut(&mut self, user: &UserIdentifier) -> Option<&mut ConnectionTX> {
-        self.users.get_mut(user)
-    }*/
+    pub fn users<'a>(
+        &'a self,
+    ) -> std::collections::hash_map::Keys<'a, UserIdentifier, ConnectionTX> {
+        self.users.keys()
+    }
 
-    pub fn users<'a>(&'a self) -> std::collections::hash_set::Iter<'a, UserIdentifier> {
-        self.users.iter()
+    pub fn has_user(&self, user: &UserIdentifier) -> bool {
+        self.users.contains_key(user)
     }
 
     pub fn join(
         &mut self,
         user: &UserIdentifier,
-        key: Option<&String>,
+        tx: &ConnectionTX,
+        key: &Option<String>,
     ) -> Result<(), ChannelError> {
         if !self.verify_key(key) {
             return Err(ChannelError::BadKey);
@@ -117,13 +119,57 @@ impl Channel {
             return Err(ChannelError::Banned);
         }
 
-        if self.users.contains(user) {
+        if self.users.contains_key(user) {
             return Err(ChannelError::AlreadyMember);
         }
 
-        //self.broadcast
-        self.users.insert(user.clone());
+        self.broadcast(
+            None,
+            Event::Message(vec![
+                IRCMessage {
+                    prefix: Some(user.as_prefix()),
+                    command: Command::JOIN(Requests::Join {
+                        join: Requests::JoinChannels::Channels(vec![self.name().clone()]),
+                    }),
+                },
+            ]),
+        );
+        self.users.insert(user.clone(), tx.clone());
         Ok(())
+    }
+
+    pub fn part(&mut self, user: &UserIdentifier, message: &Option<String>) {
+        assert!(self.users.remove(user).is_some());
+        self.broadcast(
+            None,
+            Event::Message(vec![
+                IRCMessage {
+                    prefix: Some(user.as_prefix()),
+                    command: Command::PART(Requests::Part {
+                        channels: vec![self.name().clone()],
+                        message: message.clone(),
+                    }),
+                },
+            ]),
+        );
+    }
+
+    fn broadcast(&self, skip_user: Option<&UserIdentifier>, message: Event) {
+        self.users
+            .iter()
+            .filter(|&(u, _)| if let Some(skip) = skip_user {
+                u != skip
+            } else {
+                true
+            })
+            .for_each(|(_, tx)| {
+                let tx = tx.clone();
+                let message = message.clone();
+                self.shared_state
+                    .thread_pool
+                    .spawn_fn(move || tx.send(message))
+                    .forget()
+            });
     }
 
     //pub fn broadcast(&self,

@@ -73,7 +73,7 @@ pub enum Command {
     // 6.1 Error replies.
     ERR_NOSUCHNICK(responses::NOSUCHNICK),
     ERR_NOSUCHSERVER(responses::NOSUCHSERVER),
-    ERR_NOSUCHCHANNEL(responses::NOSUCHCHANNEL),
+    ERR_NOSUCHCHANNEL(responses::NoSuchChannel),
     ERR_CANNOTSENDTOCHAN(responses::CANNOTSENDTOCHAN),
     ERR_TOOMANYCHANNELS(responses::TOOMANYCHANNELS),
     ERR_WASNOSUCHNICK(responses::WASNOSUCHNICK),
@@ -92,7 +92,7 @@ pub enum Command {
     ERR_NICKNAMEINUSE(responses::NICKNAMEINUSE),
     ERR_NICKCOLLISION(responses::NICKCOLLISION),
     ERR_USERNOTINCHANNEL(responses::USERNOTINCHANNEL),
-    ERR_NOTONCHANNEL(responses::NOTONCHANNEL),
+    ERR_NOTONCHANNEL(responses::NotOnChannel),
     ERR_USERONCHANNEL(responses::USERONCHANNEL),
     ERR_NOLOGIN(responses::NOLOGIN),
     ERR_SUMMONDISABLED(responses::SUMMONDISABLED),
@@ -142,7 +142,7 @@ pub enum Command {
     RPL_WHOREPLY(responses::WHOREPLY),
     RPL_ENDOFWHO(responses::ENDOFWHO),
     RPL_NAMREPLY(responses::NamReply),
-    RPL_ENDOFNAMES(responses::ENDOFNAMES),
+    RPL_ENDOFNAMES(responses::EndOfNames),
     RPL_LINKS(responses::LINKS),
     RPL_ENDOFLINKS(responses::ENDOFLINKS),
     RPL_BANLIST(responses::BANLIST),
@@ -893,7 +893,7 @@ impl str::FromStr for Command {
                 responses::NOSUCHSERVER::default(),
             )),
             "403" => Ok(Command::ERR_NOSUCHCHANNEL(
-                responses::NOSUCHCHANNEL::default(),
+                responses::NoSuchChannel::default(),
             )),
             "404" => Ok(Command::ERR_CANNOTSENDTOCHAN(
                 responses::CANNOTSENDTOCHAN::default(),
@@ -938,7 +938,7 @@ impl str::FromStr for Command {
                 responses::USERNOTINCHANNEL::default(),
             )),
             "442" => Ok(Command::ERR_NOTONCHANNEL(
-                responses::NOTONCHANNEL::default(),
+                responses::NotOnChannel::default(),
             )),
             "443" => Ok(Command::ERR_USERONCHANNEL(
                 responses::USERONCHANNEL::default(),
@@ -1030,7 +1030,7 @@ impl str::FromStr for Command {
             "352" => Ok(Command::RPL_WHOREPLY(responses::WHOREPLY::default())),
             "315" => Ok(Command::RPL_ENDOFWHO(responses::ENDOFWHO::default())),
             "353" => Ok(Command::RPL_NAMREPLY(responses::NamReply::default())),
-            "366" => Ok(Command::RPL_ENDOFNAMES(responses::ENDOFNAMES::default())),
+            "366" => Ok(Command::RPL_ENDOFNAMES(responses::EndOfNames::default())),
             "364" => Ok(Command::RPL_LINKS(responses::LINKS::default())),
             "365" => Ok(Command::RPL_ENDOFLINKS(responses::ENDOFLINKS::default())),
             "367" => Ok(Command::RPL_BANLIST(responses::BANLIST::default())),

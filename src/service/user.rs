@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use super::messages::Message as IRCMessage;
 use super::messages::commands::{Command, requests as Requests, responses as Responses};
-use super::connection::{Message as ConnectionMessage, ConnectionTX};
+use super::connection::ConnectionTX;
 use super::channel::{Identifier as ChannelIdentifier, ChannelError, Channel};
 use super::server::Server;
 
@@ -146,6 +146,10 @@ impl User {
 
     pub fn join(&mut self, channel: &ChannelIdentifier) {
         assert!(self.channels.insert(channel.clone()));
+    }
+
+    pub fn part(&mut self, channel: &ChannelIdentifier) {
+        assert!(self.channels.remove(&channel));
     }
 
     pub fn channels<'a>(&'a self) -> std::collections::hash_set::Iter<'a, ChannelIdentifier> {

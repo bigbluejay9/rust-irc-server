@@ -22,11 +22,14 @@ use tokio_core::reactor::Core;
 pub fn start(configuration: Arc<configuration::Configuration>) {
     trace!("Using configuration: {:#?}.", configuration);
 
+    let thread_pool = CpuPool::new_num_cpus();
     let shared_state = Arc::new(shared_state::SharedState::new(
         chrono::offset::Utc::now(),
         hostname::get_hostname().unwrap(),
+        &thread_pool,
         configuration,
     ));
+
     let srv = Arc::new(Mutex::new(server::Server::new(Arc::clone(&shared_state))));
     let connections = Arc::new(Mutex::new(HashMap::new()));
     let debug_service = Arc::new(debug::DebugService::new(
@@ -56,7 +59,6 @@ pub fn start(configuration: Arc<configuration::Configuration>) {
         Ok(ref d) => d.handle(),
         Err(ref e) => e.handle(),
     };
-    let thread_pool = CpuPool::new_num_cpus();
 
     // TODO(lazau): Add secure listener.
     let insecure_lis = TcpListener::bind(

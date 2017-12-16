@@ -1,4 +1,5 @@
 use chrono;
+use futures_cpupool::CpuPool;
 use handlebars;
 use std;
 use super::super::{configuration, templates};
@@ -11,6 +12,7 @@ pub struct SharedState {
     pub hostname: String,
     pub template_engine: TE,
     pub configuration: std::sync::Arc<configuration::Configuration>,
+    pub thread_pool: CpuPool,
 }
 
 // Workaround since Handlebars doensn't derive Debug.
@@ -26,6 +28,7 @@ impl SharedState {
     pub fn new(
         time: chrono::DateTime<chrono::Utc>,
         hostname: String,
+        thread_pool: &CpuPool,
         configuration: std::sync::Arc<configuration::Configuration>,
     ) -> Self {
         let mut template_engine = handlebars::Handlebars::new();
@@ -51,6 +54,7 @@ impl SharedState {
             created: time,
             hostname: hostname,
             template_engine: TE(template_engine),
+            thread_pool: thread_pool.clone(),
             configuration: configuration,
         }
     }

@@ -36,17 +36,19 @@ enum ConnectionType {
     Server, // unimplemented.
 }
 
-#[derive(Debug)]
-pub enum Message {
+#[derive(Debug, Clone)]
+pub enum Event {
+    Event,
+    Message(Vec<IRCMessage>),
 }
 
-pub type ConnectionTX = mpsc::Sender<Message>;
+pub type ConnectionTX = mpsc::Sender<Event>;
 
-// A union of socket events and messages to the connection.
+// A union of socket and connection events.
 #[derive(Debug)]
 enum ConnectionEvent {
     Socket(String),
-    Message(Message),
+    Event(Event),
 }
 
 #[derive(Debug)]
@@ -135,7 +137,7 @@ impl Connection {
         let fut = stream
             .map(|m| ConnectionEvent::Socket(m))
             .select(rx.then(move |rx| {
-                Ok(ConnectionEvent::Message(
+                Ok(ConnectionEvent::Event(
                     rx.expect("connection RX cannot fail"),
                 ))
             }))
@@ -160,9 +162,7 @@ impl Connection {
                         };
                         connection.lock().unwrap().process_irc_message(message)
                     }
-                    ConnectionEvent::Message(m) => {
-                        connection.lock().unwrap().process_system_message(m)
-                    }
+                    ConnectionEvent::Event(e) => connection.lock().unwrap().process_system_event(e),
                 };
                 future::ok(res)
             })
@@ -393,63 +393,23 @@ impl Connection {
                 verify_registered!();
                 match jt {
                     Requests::JoinChannels::PartAll => {
-                        /*connection.server.lock().unwrap().part_all(
-                                user.identifier(),
-                                None,
-                                );*/
-                        unimplemented!()
+                        let channels = self.get_user()
+                            .channels()
+                            .map(|ident| ident.name().clone())
+                            .collect();
+                        let user = self.get_user().identifier().clone();
+                        self.part(user, channels, None)
                     }
                     Requests::JoinChannels::Channels(r) => {
-                        let joined = {
-                            let user = self.get_user();
-                            self.server.lock().unwrap().join(
-                                user.identifier(),
-                                r.iter()
-                                    .map(|k| (k, None))
-                                    .collect(),
-                            )
-                        };
-                        let user = self.get_user_mut();
-                        joined
-                            .into_iter()
-                            .zip(r.iter())
-                            .flat_map(|(res, channel_name)| {
-                                if res.is_ok() {
-                                    user.join(&ChannelIdentifier::from_name(channel_name));
-                                }
-                                Connection::produce_join_messages(
-                                    user.identifier(),
-                                    channel_name,
-                                    res,
-                                )
-                            })
-                            .collect()
+                        let user = self.get_user().identifier().clone();
+                        self.join(user, r.into_iter().map(|k| (k, None)).collect())
                     }
                     Requests::JoinChannels::KeyedChannels(r) => {
-                        let joined = {
-                            let user = self.get_user();
-                            self.server.lock().unwrap().join(
-                                user.identifier(),
-                                r.iter()
-                                    .map(|&(ref name, ref key)| (name, Some(key)))
-                                    .collect(),
-                            )
-                        };
-                        let user = self.get_user_mut();
-                        joined
-                            .into_iter()
-                            .zip(r.into_iter())
-                            .flat_map(|(res, (channel_name, _))| {
-                                if res.is_ok() {
-                                    user.join(&ChannelIdentifier::from_name(&channel_name));
-                                }
-                                Connection::produce_join_messages(
-                                    user.identifier(),
-                                    &channel_name,
-                                    res,
-                                )
-                            })
-                            .collect()
+                        let user = self.get_user().identifier().clone();
+                        self.join(
+                            user,
+                            r.into_iter().map(|(name, key)| (name, Some(key))).collect(),
+                        )
                     }
                 }
             }
@@ -462,7 +422,8 @@ impl Connection {
                 verify_registered!();
                 // MODE query.
                 if mode_string.is_none() {
-                    unimplemented!();
+                    //unimplemented!();
+                    return Vec::new();
                 }
 
                 // MODE adjustment.
@@ -515,6 +476,11 @@ impl Connection {
                 }
             }
 
+            Command::PART(Requests::Part { channels, message }) => {
+                let user = self.get_user().identifier().clone();
+                self.part(user, channels, message)
+            }
+
             Command::PING(Requests::Ping { originator, target }) => {
                 if target.is_some() && target.unwrap() != self.shared_state.hostname {
                     // Forward to another server.
@@ -556,34 +522,91 @@ impl Connection {
         }
     }
 
-    pub fn process_system_message(&mut self, m: Message) -> Vec<IRCMessage> {
-        match m {
-            _ => unimplemented!(),
-            /*Event::ServerRegistrationResult(r) => {
-                match r {
-                    Ok((ident, tx)) => {
-                        let nickname = ident.nickname.clone();
-                        MultiplexedSink::add_user(&self.sink_map, &ident, tx);
-                        self.conn_type = ConnectionType::Client(ident);
+    pub fn process_system_event(&mut self, e: Event) -> Vec<IRCMessage> {
+        match e {
+            Event::Event => unimplemented!(),
+            Event::Message(m) => m,
+        }
+    }
 
-                    }
-                    Err(server_error) => {
-                        match server_error {
-                            ServerError::NickInUse => {
-                                error_resp!(Command::ERR_NICKNAMEINUSE(Responses::NICKNAMEINUSE {
-                                    nick: self.get_registration()
-                                        .nickname
-                                        .as_ref()
-                                        .unwrap()
-                                        .clone(),
-                                }))
-                            }
-                            _ => unreachable!(),
+    fn join(
+        &mut self,
+        _user: UserIdentifier,
+        channels: Vec<(String, Option<String>)>,
+    ) -> Vec<IRCMessage> {
+        let joined = {
+            let user = self.get_user();
+            self.server.lock().unwrap().join(
+                user.identifier(),
+                &channels,
+            )
+        };
+        let user = self.get_user_mut();
+        joined
+            .into_iter()
+            .zip(channels.into_iter())
+            .flat_map(|(res, (channel_name, _))| {
+                if res.is_ok() {
+                    user.join(&ChannelIdentifier::from_name(&channel_name));
+                }
+                Connection::produce_join_messages(user.identifier(), &channel_name, res)
+            })
+            .collect()
+    }
+
+    fn part(
+        &mut self,
+        _user: UserIdentifier,
+        channels: Vec<String>,
+        message: Option<String>,
+    ) -> Vec<IRCMessage> {
+        let parted = {
+            let user = self.get_user().identifier();
+            self.server.lock().unwrap().part(user, &channels, &message)
+        };
+
+        let prefix = self.get_user().identifier().as_prefix();
+        let nick = self.get_user().nick().clone();
+        let user = self.get_user_mut();
+        let mut result = Vec::with_capacity(channels.len());
+        for (res, name) in parted.into_iter().zip(channels.into_iter()) {
+            match res {
+                Ok(_) => {
+                    user.part(&ChannelIdentifier::from_name(&name));
+                    result.push(IRCMessage {
+                        prefix: Some(prefix.clone()),
+                        command: Command::PART(Requests::Part {
+                            channels: vec![name],
+                            message: message.clone(),
+                        }),
+                    })
+                }
+                Err(se) => {
+                    match se {
+                        ServerError::NoSuchChannel => {
+                            result.push(IRCMessage {
+                                prefix: None,
+                                command: Command::ERR_NOSUCHCHANNEL(Responses::NoSuchChannel {
+                                    nick: nick.clone(),
+                                    channel: name,
+                                }),
+                            })
                         }
+                        ServerError::NotOnChannel => {
+                            result.push(IRCMessage {
+                                prefix: None,
+                                command: Command::ERR_NOTONCHANNEL(Responses::NotOnChannel {
+                                    nick: nick.clone(),
+                                    channel: name,
+                                }),
+                            })
+                        }
+                        _ => unreachable!(),
                     }
                 }
-            }*/
+            }
         }
+        result
     }
 
     fn produce_join_messages(
@@ -610,18 +633,23 @@ impl Connection {
                         }),
                     });
                 }
-                let mut members = Vec::with_capacity(users.len() + 1);
-                members.push(("".to_string(), user.nick().clone()));
                 result.push(IRCMessage {
                     prefix: None,
                     command: Command::RPL_NAMREPLY(Responses::NamReply {
                         nick: user.nick().clone(),
                         symbol: "=".to_string(), //FIXME
                         channel: channel_name.clone(),
-                        members: users.into_iter().fold(members, |mut mem, u| {
-                            mem.push(("".to_string(), u.into_nick()));
-                            mem
-                        }),
+                        members: users
+                            .into_iter()
+                            .map(|m| ("".to_string(), m.into_nick()))
+                            .collect(),
+                    }),
+                });
+                result.push(IRCMessage {
+                    prefix: None,
+                    command: Command::RPL_ENDOFNAMES(Responses::EndOfNames {
+                        nick: user.nick().clone(),
+                        channel: channel_name.clone(),
                     }),
                 });
                 result

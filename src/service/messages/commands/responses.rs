@@ -7,7 +7,10 @@ pub struct NOSUCHNICK {}
 pub struct NOSUCHSERVER {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct NOSUCHCHANNEL {}
+pub struct NoSuchChannel {
+    pub nick: String,
+    pub channel: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct CANNOTSENDTOCHAN {}
@@ -66,7 +69,10 @@ pub struct NICKCOLLISION {}
 pub struct USERNOTINCHANNEL {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct NOTONCHANNEL {}
+pub struct NotOnChannel {
+    pub nick: String,
+    pub channel: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct USERONCHANNEL {}
@@ -237,7 +243,10 @@ pub struct NamReply {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct ENDOFNAMES {}
+pub struct EndOfNames {
+    pub nick: String,
+    pub channel: String,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct LINKS {}
@@ -467,9 +476,9 @@ impl fmt::Display for NOSUCHSERVER {
     }
 }
 
-impl fmt::Display for NOSUCHCHANNEL {
+impl fmt::Display for NoSuchChannel {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "403")
+        write!(f, "403 {} {} :No such channel", self.nick, self.channel)
     }
 }
 
@@ -581,9 +590,14 @@ impl fmt::Display for USERNOTINCHANNEL {
     }
 }
 
-impl fmt::Display for NOTONCHANNEL {
+impl fmt::Display for NotOnChannel {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "442")
+        write!(
+            f,
+            "442 {} {} :You're not on that channel",
+            self.nick,
+            self.channel
+        )
     }
 }
 
@@ -882,16 +896,21 @@ impl fmt::Display for ENDOFWHO {
 impl fmt::Display for NamReply {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
         write!(f, "353 {} {} {} :", self.nick, self.symbol, self.channel)?;
-        for &(ref pre, ref n) in self.members.iter() {
-            write!(f, "{}{}", pre, n)?;
+        let len = self.members.len();
+        for (count, &(ref pre, ref n)) in self.members.iter().enumerate() {
+            if count == len - 1 {
+                write!(f, "{}{}", pre, n)?;
+            } else {
+                write!(f, "{}{} ", pre, n)?;
+            }
         }
         Ok(())
     }
 }
 
-impl fmt::Display for ENDOFNAMES {
+impl fmt::Display for EndOfNames {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "366")
+        write!(f, "366 {} {}", self.nick, self.channel)
     }
 }
 
