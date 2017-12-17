@@ -144,4 +144,13 @@ impl Server {
         }
         result
     }
+
+    pub fn send(&mut self, user: &UserIdentifier, targets: &Vec<String>, message: &String) {
+        for t in targets {
+            self.channels
+                .get_mut(&ChannelIdentifier::from_name(t))
+                .unwrap()
+                .privmsg(user, message);
+        }
+    }
 }

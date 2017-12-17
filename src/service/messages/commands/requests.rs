@@ -514,8 +514,8 @@ impl fmt::Display for Info {
 
 impl fmt::Display for Privmsg {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        write!(f, "PRIVMSG");
-        unimplemented!()
+        assert!(self.targets.len() == 1);
+        write!(f, "PRIVMSG {} {}", self.targets[0], self.message)
     }
 }
 

@@ -154,10 +154,25 @@ impl Channel {
         );
     }
 
-    fn broadcast(&self, skip_user: Option<&UserIdentifier>, message: Event) {
+    pub fn privmsg(&mut self, source: &UserIdentifier, message: &String) {
+        self.broadcast(
+            Some(source.clone()),
+            Event::Message(vec![
+                IRCMessage {
+                    prefix: Some(source.as_prefix()),
+                    command: Command::PRIVMSG(Requests::Privmsg {
+                        targets: vec![self.name().clone()],
+                        message: message.clone(),
+                    }),
+                },
+            ]),
+        );
+    }
+
+    fn broadcast(&self, skip_user: Option<UserIdentifier>, message: Event) {
         self.users
             .iter()
-            .filter(|&(u, _)| if let Some(skip) = skip_user {
+            .filter(|&(u, _)| if let Some(ref skip) = skip_user {
                 u != skip
             } else {
                 true
